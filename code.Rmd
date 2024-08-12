@@ -1,0 +1,622 @@
+
+### figure2 
+###analysis three enrichment 
+```{r}
+library(igraph)
+library(patchwork)
+library(ggsci)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+immune_pathways <- scan("data/immune_nodes.txt",character(),sep="\n")
+df_ci <- read.csv("data/enrich_CI.csv",sep="\t")
+df_degs <- read.csv("data/DGEs.csv",sep="\t")
+df_gsea <- read.csv("data/fgsea.csv",sep="\t")
+
+#### modularity
+outTab <- data.frame()
+for (cutoff in seq(5,200,5)) {
+  cis <- intersect(immune_pathways,df_ci[1:cutoff,"Reactome_ID"])
+  degs <- intersect(immune_pathways,df_degs[1:cutoff,"Reactome_ID"])
+  gseas <- intersect(immune_pathways,df_gsea[1:cutoff,"Reactome_ID"])
+
+  outTab <- rbind(outTab,cbind(cutoff=cutoff,CEA=length(cis),DGE=length(degs),GSEA=length(gseas)))
+}
+
+p_pathways <- outTab %>% pivot_longer(cols = 2:4,
+                        names_to = "Ranking",
+                        values_to = "Count") %>%mutate(ranking=factor(Ranking,levels=c("CEA","DGE","GSEA"))) %>% 
+  ggplot(aes(cutoff, Count, color = Ranking)) +
+  geom_line(linewidth=1) +
+  geom_point(shape=21,fill="white") +
+  theme_pubr()+
+  labs(x="TopN Pathways",color="Ranking")+
+  theme(axis.text = element_text(size=7),axis.title = element_text(size=9),legend.text = element_text(size=7),legend.title = element_text(size=9))+
+  scale_color_npg()
+
+
+#### modularity
+df_edges <- read.csv("data/ReactomePathwaysRelation.txt",sep="\t",header = FALSE,col.names = c("parent","child"))
+df_edges <- df_edges[df_edges$parent %in%immune_pathways, ]
+df_edges <- df_edges[df_edges$child %in%immune_pathways, ]
+
+g <- graph_from_data_frame(d=df_edges,directed = F)
+calc_modularity <- function(nodes){
+  V(g)$state <- ifelse(V(g)$name%in% nodes,1,0 )
+  subgraph <- induced_subgraph(g,V(g)[state==1])
+  community <- cluster_walktrap(subgraph)
+  modularity_value <- modularity(community)
+  return(modularity_value)
+}
+
+outTab <- data.frame()
+for (cutoff in seq(5,30,5)) {
+  cis <- intersect(immune_pathways,df_ci[1:cutoff,"Reactome_ID"])
+  degs <- intersect(immune_pathways,df_degs[1:cutoff,"Reactome_ID"])
+  gseas <- intersect(immune_pathways,df_gsea[1:cutoff,"Reactome_ID"])
+  outTab <- rbind(outTab,cbind(cutoff=cutoff,CEA=calc_modularity(cis),DGE=calc_modularity(degs),GSEA=calc_modularity(gseas)))
+}
+
+p_modularity <-  outTab %>% pivot_longer(cols = 2:4,
+                        names_to = "Ranking",
+                        values_to = "Modularity") %>%mutate(ranking=factor(Ranking,levels=c("CEA","DGE","GSEA"))) %>% 
+  ggplot(aes(cutoff, Modularity, color = Ranking)) +
+  geom_line(linewidth=1) +
+  geom_point(shape=21,fill="white") +
+  theme_pubr()+
+    labs(x="TopN Pathways",color="Ranking")+
+  theme(axis.text = element_text(size=7),axis.title = element_text(size=9),legend.text = element_text(size=7),legend.title = element_text(size=9))+
+  scale_color_npg()
+
+ 
+p_modularity + 
+ p_pathways  
+ 
+```
+
+### figure3 
+###gene set perspective
+```{r}
+library(readr)
+library(ggpubr)
+library(ggplot2)
+library(ggsci)
+library(patchwork)
+
+load_sigs <- function(gmtfile="data/ReactomePathways.gmt" ){ 
+  reactome_sigs <- list()
+  gmt_data <- read_lines(gmtfile)
+  for (line in gmt_data) {
+    parts <- strsplit(line, "\t")[[1]]
+    pathway_id <- parts[2]    
+    gene_list <- parts[3:length(parts)]  
+    reactome_sigs[[pathway_id]] <- gene_list
+  }
+  return(reactome_sigs)
+}
+output_gene_setdistance <- function(df,ranking_name,topn=30){
+    current <- df$Reactome_ID[1]
+    outTab <- data.frame()
+    for (i in 1:30) {
+      id <- df$Reactome_ID[i]
+      common_genes <- intersect(nodes[[current]], nodes[[id]])
+      all_genes <- union(nodes[[current]], nodes[[id]])
+      outTab <- rbind(outTab, cbind(Rank=i,
+                                    Jaccard=length(common_genes)/length(all_genes), 
+                                    Coverage=length(common_genes)/length(nodes[[current]]),
+                                    ranking=ranking_name ))
+    }
+    return(outTab)
+  
+}
+
+nodes <- load_sigs()
+df_degs <- read.csv("data/DGEs.csv",sep="\t")
+distance_dge <- output_gene_setdistance(data.frame(Reactome_ID=df_degs$Reactome_ID),
+                                             ranking_name="DGE", )
+
+df_gsea <- read.csv("data/fgsea.csv",sep="\t")
+distance_gsea <- output_gene_setdistance(data.frame(Reactome_ID=df_gsea$Reactome_ID),
+                                             ranking_name="GSEA", )
+df_ci <- readRDS("data/four_states.rds")
+distance_cea <- output_gene_setdistance(data.frame(Reactome_ID=df_ci$Reactome_ID),
+                                             ranking_name="CEA", )
+outTab <- rbind(rbind(distance_dge,distance_gsea),distance_cea)
+outTab$ranking <- factor(outTab$ranking,levels = c("CEA","DGE","GSEA"))
+outTab$Rank <- as.numeric(outTab$Rank)
+outTab$Jaccard <- as.numeric(outTab$Jaccard)
+outTab$Coverage <- as.numeric(outTab$Coverage)
+
+
+
+p1 <- ggplot(outTab,aes(Rank,Jaccard, color=ranking))+
+  geom_line(linewidth=1,)+
+  geom_point(shape=21,fill="white" )+
+  theme_pubr()+
+  geom_vline(xintercept = 7,linetype="dashed",color="#DC0000FF")+
+  # geom_segment(aes(x = 7, xend = 7, y = 0, yend = 0.5), color = "darkred" )+
+  theme( axis.text = element_text(size=7) ,axis.title.y = element_text(size=9),axis.line = element_blank(),axis.title.x = element_blank(),
+         panel.border = element_rect(colour = "gray20", fill=NA, linewidth=1),
+          
+         legend.position = "none") +
+  facet_wrap(ranking~.)+
+  scale_color_npg()
+
+
+p2 <- ggplot(outTab,aes(Rank,Coverage, color=ranking ))+
+  geom_line(linewidth=1 )+
+  geom_point(shape=21,fill="white" )+
+  theme_pubr()+
+  geom_vline(xintercept = 7,linetype="dashed",color="#DC0000FF")+
+  theme( axis.text = element_text(size=7) ,axis.line = element_blank(),axis.title = element_text(size=9),
+         panel.border = element_rect(colour = "gray20", fill=NA, linewidth=1),legend.position = "none") +
+  facet_wrap(ranking~.)+  
+  scale_color_npg()
+ 
+p1/p2 
+ 
+```
+### figure4 
+### tree perspecitve
+```{r}
+library(igraph)
+library(ggraph)
+library(ggsci)
+df <- read.csv("data/immune_relation.csv",col.names = c("from","to"))
+ 
+g <- graph_from_data_frame(df,directed = F)
+selected_nodes <- c("R-HSA-202427","R-HSA-202430","R-HSA-389948","R-HSA-388841","R-HSA-202433","R-HSA-202403" )
+
+V(g)$color <- factor(ifelse(V(g)$name  %in% selected_nodes, "selected", "unselected"))
+  
+V(g)$shape <- factor(ifelse(V(g)$name == "R-HSA-202427", "seed",  "other"))
+V(g)$size <- ifelse(V(g)$name  %in% selected_nodes,1.5, 1)
+p_tree <- ggraph(g, layout = "tree") + 
+  geom_edge_diagonal(color="gray80") + 
+  geom_node_point( aes(shape=shape,color=color) ,fill = "white", size = V(g)$size) + 
+    geom_node_text(aes(label = ifelse(name  %in% c("R-HSA-168256","R-HSA-202427"), name, "")), vjust = 2.0, hjust = 0,size=2,color="gray20") + 
+  theme_void()+
+theme(legend.position = "bottom" , axis.text = element_text(size=7 ),  legend.title  = element_text(size=9),legend.text=element_text(size=7),legend.key.height = unit(0.15,"cm"),axis.title = element_blank(), legend.key.width = unit(0.5,"cm"),axis.text.x = element_blank(), panel.background = element_rect(fill = alpha("#F9D461",0.1), colour = NA),   legend.key  = element_blank())+
+  scale_color_npg()
+
+
+out_semantic_distance <- function(g,g_edges,df_ranking,ranking_name){
+      start_node <- df_ranking$Reactome_ID[1]
+      all_nodes <- V(g)$name
+      paths <- shortest_paths(g, from = start_node, to = all_nodes, output = "vpath")
+       
+      path_from_seed_list <- list()
+      
+      for (path in paths$vpath) {
+        if (length(path) > 1) {
+          edge_seq <- c()
+          for (i in 1:(length(path) - 1)) {
+            edge <- paste(V(g)$name[path[i]], "_", V(g)$name[path[i + 1]], sep = "")
+            edge_seq <- c(edge_seq,edge)
+          }
+          path_from_seed_list[[V(g)$name[path[length(path)]]]] <- edge_seq
+        }
+      }
+      
+      forward_edges <- apply(g_edges, 1, function(x){paste(c(x[1],x[2]),collapse = "_")})
+      backward_edges <- apply(g_edges, 1, function(x){paste(c(x[2],x[1]),collapse = "_")})
+      
+      edge_score <- c(rep(0,length(forward_edges)),rep(1,length(backward_edges)))
+      names(edge_score) <- c(forward_edges,backward_edges)
+      
+      outTab <- data.frame()
+      outTab <- rbind(outTab,cbind(Rank=1,Distance=0,ranking=ranking_name))
+      for (pos in 2:30) {
+        node <- df_ranking$Reactome_ID[pos]
+        if (node %in% names(path_from_seed_list)) {
+            edge_seq <- path_from_seed_list[[node]]
+        energy <- sum(edge_score[edge_seq])
+        }else{
+          energy <- 10
+        }
+        outTab <- rbind(outTab,cbind(Rank=pos,Distance=energy,ranking=ranking_name))
+      }
+      return(outTab)
+}
+
+
+df_degs <- read.csv("data/DGEs.csv",sep="\t")
+ 
+distance_dge <- out_semantic_distance(g,df,data.frame(Reactome_ID=df_degs$Reactome_ID),
+                                              ranking_name="DGE"  )
+
+df_gsea <- read.csv("data/fgsea.csv",sep="\t")
+distance_gsea <- out_semantic_distance(g,df,data.frame(Reactome_ID=df_gsea$Reactome_ID),
+                                             ranking_name="GSEA"  )
+df_ci <- readRDS("data/four_states.rds")
+distance_cea <- out_semantic_distance(g,df,data.frame(Reactome_ID=df_ci$Reactome_ID),
+                                             ranking_name="CEA"  )
+outTab <- rbind(rbind(distance_dge,distance_gsea),distance_cea)
+outTab$ranking <- factor(outTab$ranking,levels = c("CEA","DGE","GSEA"))
+outTab$Rank <- as.numeric(outTab$Rank)
+outTab$Distance <- as.numeric(outTab$Distance)
+
+
+p_height <- outTab %>% ggplot(aes(Rank, Distance,color=ranking)) +
+  geom_line( linewidth=1) +
+  geom_point(shape = 21, fill = "white" ) +
+  scale_y_continuous(limits = c(0, 10), breaks = seq(0, 10, 3)) +
+  geom_hline(yintercept = 3, color = "darkred",linetype="dashed") +
+  theme_pubr() +
+  theme( axis.text = element_text(size=7) ,axis.line = element_blank(),
+         panel.border = element_rect(colour = "gray20", fill=NA, linewidth=1),
+         axis.title = element_text(size=9),
+         legend.position = "none")+
+  facet_wrap(ranking~.)+  
+  scale_color_npg()
+
+ p_height/p_tree 
+```
+
+### figure5
+###abstract sub-network
+```{r}
+library(igraph)
+library(ggplot2)
+library(dplyr)
+library(data.table) 
+library(stringr)
+library(ggpubr)
+library(ggsci)
+library(pROC)
+library(tibble)
+library(ggbeeswarm)
+
+
+df_interactions <- fread("data/9606.protein.physical.links.v12.0.txt.gz", sep = " ")
+df_proteins <- fread("data/9606.protein.info.v12.0.txt.gz", sep = "\t", col.names = c("protein_id", "preferred_name", "protein_size", "annotation"))
+
+
+pd_merged <- merge(df_interactions, df_proteins[, .(protein_id, preferred_name)], by.x = "protein1", by.y = "protein_id", all.x = TRUE)
+pd_merged <- merge(pd_merged, df_proteins[, .(protein_id, preferred_name)], by.x = "protein2", by.y = "protein_id", all.x = TRUE, suffixes = c("_x", "_y"))
+
+pd_merged <- pd_merged[, .(preferred_name_x, preferred_name_y, combined_score)]
+setnames(pd_merged, c("preferred_name_x", "preferred_name_y", "combined_score"), c("gene1", "gene2", "score"))
+pd_merged <- pd_merged[score >= 700]
+
+pd_merged[["pair"]] <-  apply(pd_merged, 1, function(row) paste(sort(c(row[[1]],row[[2]])), collapse = "_"))
+pd_merged <- pd_merged[!duplicated(pd_merged$pair),]
+ 
+icb_genes <- readRDS("data/icb_genes.rds")
+pd_merged <- pd_merged[gene1 %in% icb_genes & gene2 %in% icb_genes]
+
+
+g <- graph_from_data_frame(pd_merged, directed = FALSE)
+print(paste("Nodes:", vcount(g), "Edges:", ecount(g)))
+ 
+deg <- degree(g)
+qplot(deg, bins = 1000, xlab = "Degree", ylab = "Frequency")
+ 
+s <- components(g)
+g_0 <- induced_subgraph(g, which(s$membership == 1))
+
+top_genes <- fread("data/reactome_top_pathways.txt", header = FALSE)$V1
+
+sub <- induced_subgraph(g_0, which(V(g_0)$name %in% top_genes))
+
+s <- components(sub)
+subgraph_0 <- induced_subgraph(sub, which(s$membership == 1))
+
+bet <- betweenness(subgraph_0, directed = FALSE,normalized = T)
+ggdata <- data.frame(gene=names(bet),betweenness=unlist(bet))
+ggdata <- ggdata[order(ggdata$betweenness,decreasing = T),][1:10,]
+
+p_bet <- ggplot(ggdata,aes(gene,betweenness,fill=gene))+
+  geom_histogram(stat = "identity")+
+  theme_pubr()+
+theme(axis.title.x = element_blank(),axis.text.x = element_text(angle=90))+
+    theme(axis.text = element_text( size = 7),axis.title  = element_text(size=9),legend.position = "none")+
+  scale_color_npg()
+ 
+
+### ZAP70 expression
+pd_ici <- readRDS("data/expression_tpm.rds")
+
+ggdata <- data.frame(ZAP70=log2(pd_ici$ZAP70+0.001),ICOS=log2(pd_ici$ICOS+0.001),responder=ifelse(pd_ici$Responder,"R","NR"),response=pd_ici$Response)
+ 
+p_zap70 <- ggplot(ggdata,aes(response,ZAP70,color=response))+
+  geom_boxplot(width=0.5,outlier.size=0.4,outlier.alpha = 0.6 )+
+  stat_compare_means(comparisons = list(c("PD","SD"),c("PD","PR"),c("PD","CR")) ,size=2.5 )+ 
+  theme_pubr()+
+  labs(y="log2(ZAP70+0.001)")+
+  theme(legend.position = "none",axis.title.x = element_blank() )+
+  theme(axis.text = element_text( size =7),axis.title  = element_text(size=9)) +
+  geom_beeswarm(alpha=0.4,cex=1,size=0.5  )+
+  scale_color_npg()
+
+###single cell
+immune_cells <- c("T-cells","B-cells","Plasma cells","NK-cells","granulocytes","monocytes","Macrophages","Hofbauer cells","Kupffer cells","dendritic cells","Langerhans cells")
+df_single_cell <- read.csv("data/rna_single_cell_type.tsv",sep="\t",check.names = F)
+df_single_cell <- df_single_cell[df_single_cell$`Gene name`=="ZAP70",]
+df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells,]
+
+p_single_cell <- ggplot(df_single_cell,aes(`Cell type`,nTPM,fill=`Cell type`))+
+  geom_col()+
+  theme_pubr()+ 
+  theme( axis.text = element_text(size=7 ),axis.text.x = element_text( angle = 90,hjust = 1), axis.title = element_text(size = 9),legend.position = "none",axis.title.x = element_blank())
+
+### figure TME
+df_cibersort <- read.csv("data/cibersort.csv",check.names = F )
+
+pd_ZAP70 <- data.frame(Run_ID=rownames(pd_ici),ZAP70=pd_ici$ZAP70)
+pd_merged <- merge(df_cibersort,pd_ZAP70,by="Run_ID")
+pd_merged[["ZAP70"]] <- log2(pd_merged[["ZAP70"]]+1)
+pd_merged <- column_to_rownames(pd_merged,var="Run_ID")
+colnames(pd_merged) <- gsub("_CIBERSORT","",colnames(pd_merged) )
+
+pd_merged <- pd_merged[,grepl("T_|NK_|ZAP70",colnames(pd_merged))]
+
+
+cell_correlation <- cor(pd_merged)
+
+
+ggdata <- data.frame()
+for (cell in colnames(pd_merged)) {
+  test <- cor.test(pd_merged$ZAP70, pd_merged[[cell]])
+  ggdata <- rbind(ggdata,cbind(Cell1="ZAP70",Cell2=cell,Correlation=test$estimate,pvalue=test$p.value))
+}
+ggdata[["Correlation"]] <- as.numeric(ggdata[["Correlation"]]) 
+ggdata[["pvalue"]] <- as.numeric(ggdata[["pvalue"]]) 
+
+ggdata <- ggdata %>% arrange(desc(Correlation)) %>% 
+  mutate(Significance = case_when(
+    pvalue < 0.001 ~ "***",
+    pvalue < 0.01 ~ "**",
+    pvalue < 0.05 ~ "*",
+    TRUE ~ "ns"
+  ))
+
+p_tme <- ggplot(ggdata,aes(Cell1 ,factor(Cell2,levels =rev(Cell2)  ),Correlation, fill=Correlation))+
+  geom_tile(width=0.95,height=1.2)+
+  geom_text(aes(label = round(Correlation, 2)), color = "gray20", size = 2.5)+
+  geom_text(aes(label = Significance, x =1.2), hjust = 0, size = 2.5) +
+  scale_fill_gradient2(low = "#0C6291", high = "#A63446", mid = "#FBFEF9", midpoint = 0)+
+  theme_pubr()+
+  theme(axis.line = element_blank(),axis.ticks = element_blank(),axis.text = element_text(size=7 ),  legend.title = element_text(size=7),legend.text=element_text(size=4.5),legend.key.height = unit(0.15,"cm"),axis.title = element_blank(),legend.position = c(0,-0.25),legend.direction = "horizontal",legend.key.width = unit(0.5,"cm") )
+
+
+###merge 
+ (p_bet|p_zap70)/
+  (p_single_cell|p_tme) 
+```
+
+
+###Figure6
+
+#local entropy of the node
+```{r}
+library(ggsci)
+library(ggplot2)
+library(dplyr)
+library(igraph)
+library(data.table)
+library(tibble)
+library(ggpubr)
+library(patchwork)
+df_expr <- read.csv("data/expression_tpm.csv" ,row.names = 1,check.names = F)
+df_expr <- log2(df_expr+1)
+
+df_clin <- read.csv("data/clin.csv")
+CR_samples <- df_clin[df_clin$Response=="Complete Response",  ][["Run_ID"]]
+PR_samples <- df_clin[df_clin$Response=="Partial Response",  ][["Run_ID"]]
+SD_samples <- df_clin[df_clin$Response=="Stable Disease",  ][["Run_ID"]]
+PD_samples <- df_clin[df_clin$Response=="Progressive Disease",  ][["Run_ID"]]
+net_corr <- function(expmatrix,adj_matrix){
+  df_corr  <- 0.5*(cor(expmatrix)+1)
+  df_corr  <- df_corr [rownames(adj_matrix),rownames(adj_matrix)] *adj_matrix
+  return(df_corr)
+}
+
+net_entropy <- function(expmatrix,adj_matrix){
+  degrees <- apply(adj_matrix, 1, sum)
+  df_net  <- 0.5*(cor(expmatrix)+1)
+  df_net  <- df_net [rownames(adj_matrix),rownames(adj_matrix)] *adj_matrix
+  w_  <- df_net/apply ( df_net ,1,sum  )
+  p_ <- w_
+  p_[p_>0] <- log( p_[p_>0]) 
+  w_entropy  <- apply( w_ * p_, 1, sum)
+  w_entropy <- ifelse(degrees>1,-1/(log(degrees)),0) *w_entropy
+  return(w_entropy)
+}
+df_network <- read.csv( "data/neigbors_network.csv")[,c("from","to")] %>% distinct()
+g <- graph_from_data_frame(df_network,directed = F)
+adj_matrix <-as.matrix( get.adjacency(g))
+
+genes <- scan("data/subnetwork_genes.txt",character(),sep="\t")
+
+entroy_CR <- net_entropy(df_expr[CR_samples,genes],adj_matrix)
+entroy_PR <- net_entropy(df_expr[PR_samples,genes],adj_matrix)
+entroy_PD <- net_entropy(df_expr[PD_samples,genes],adj_matrix)
+entroy_SD <- net_entropy(df_expr[SD_samples,genes],adj_matrix)
+
+# PTPRC
+
+
+ggdata <- data.frame(entropy=c(entroy_CR,entroy_PR,entroy_SD,entroy_PD),responder=c(rep("CR",length(entroy_CR)),
+                                                                                    rep("PR",length(entroy_PR)),
+                                                                                    rep("SD",length(entroy_SD)),
+                                                                                    rep("PD",length(entroy_PD))) )
+
+ggplot(ggdata[ggdata$entropy>0,],aes(responder,entropy))+
+  geom_violin()+
+  geom_boxplot(width=0.2)+
+  theme_pubr()+
+  scale_color_npg()
+
+
+entroy_R <- net_entropy(df_expr[c(CR_samples,PR_samples),genes],adj_matrix)
+entroy_NR <- net_entropy(df_expr[c(PD_samples,SD_samples),genes],adj_matrix)
+ggdata <- data.frame(entropy=c(entroy_R,entroy_NR ),Responder=c(rep("R",length(entroy_R)),
+                                                                                    rep("NR",length(entroy_NR)) ))
+
+p_net_entropy <- ggplot(ggdata[ggdata$entropy>0,],aes(Responder,entropy,color=Responder))+
+  geom_violin()+
+  geom_boxplot(width=0.2)+  
+   
+  stat_compare_means(method = "t.test",comparisons = list(c("NR","R")),size=3)+
+  theme_pubr()+
+  theme(legend.position = "none",axis.text = element_text(size=7),axis.title = element_text(size=9))+
+  scale_color_npg()
+
+
+corr_R <- net_corr(df_expr[c(CR_samples,PR_samples),genes],adj_matrix)
+corr_NR <- net_corr(df_expr[c(PD_samples,SD_samples),genes],adj_matrix)
+
+corr_delta <- reshape2::melt(corr_R-corr_NR)
+colnames(corr_delta) <- c("src","tar","corr")
+p_corr_r <- ggplot(corr_delta,aes(src,tar,fill=corr))+
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, 
+                        space = "Lab", name = expression(Delta(corr)))+
+  theme(axis.text=element_text(size=2),axis.ticks = element_blank(),legend.key.width = unit(0.2,"cm"),panel.border = element_rect(fill = NA,color = "gray30"),axis.text.x = element_text(angle = 90,hjust = 1),axis.title = element_blank(),
+        legend.title = element_text(size=7),legend.text = element_text(size=5) 
+        )
+
+df_ici <- readRDS("data/ssGSEA.rds")
+p_path <- ggplot(df_ici,aes(Responder,`ssGSEA Score`,color=Responder))+
+  geom_boxplot()+
+  theme_pubr()+
+  scale_color_npg()+
+  theme(legend.position = "none",axis.text = element_text(size=7),axis.title = element_text(size=9))+
+  stat_compare_means(comparisons = list(c("NR","R")),size=3)+
+    theme(legend.position = "none" )+
+  theme(axis.text = element_text( size =7),axis.title  = element_text(size=9)) +
+  geom_beeswarm(alpha=0.4,cex=1,size=0.5  )+
+  scale_color_npg()
+ 
+  (p_cor_four+p_cor_bin)/
+  (p_net_entropy|p_path) 
+
+```
+
+###Figure 7
+```{r}
+library(ggsci)
+library(expm)
+library(tibble)
+library(data.table)
+library(ggraph)
+library(ggplot2)
+library(reshape2)
+library(pROC)
+##fig
+heat_diffusion <- function(graph, start_node_name, t, initial_heat = 1) {
+  laplacian_matrix <- as.matrix(laplacian_matrix(graph ))
+  node_names <- V(graph)$name
+  start_node <- which(node_names == start_node_name)
+  
+  if (length(start_node) == 0) {
+    stop("Start node name not found in the graph.")
+  }
+  
+  heat <- rep(0, vcount(graph))
+  heat[start_node] <- initial_heat
+
+  diffusion_matrix <- expm(-t * laplacian_matrix)
+
+  final_heat <- diffusion_matrix %*% heat
+  
+  return(final_heat)
+}
+
+df_gene_interactions <- read.csv("data/neigbors_network.csv",row.names = 1)
+g <- graph_from_data_frame(df_gene_interactions,directed = F)
+
+
+
+get_heats <- function(start_node  ="PDCD1"){
+ t <- 0.1
+heat_values <- heat_diffusion(g, start_node, t)
+heat_values <-  data.frame(heat=heat_values,row.names = rownames(heat_values))
+heat_values <- heat_values[order(heat_values$heat,decreasing = T),,drop=F]
+return(heat_values) 
+}
+
+heat_PDCD1 <- get_heats("PDCD1")
+heat_CTLA4 <- get_heats("CTLA4")
+heat_ZAP70 <- get_heats("ZAP70")
+
+pd <- merge(heat_PDCD1,heat_CTLA4,by="row.names") 
+pd[,2:3] <- apply(pd[,2:3],2,rank)
+colnames(pd) <- c("gene","PDCD1","CTLA4")
+pd <- pd[ pd$PDCD1>133 |pd$CTLA4>133 ,]
+
+
+polygon_data <- data.frame(
+  x = c(132,132,147,150,150,135),
+  y = c(132,135,150,150,147,132)
+)
+p_rank <- ggplot(pd,aes(PDCD1,CTLA4 ))+
+  # geom_vline(xintercept = seq(floor(range(pd$PDCD1)[1]), ceiling(range(pd$PDCD1)[2]), by = 1), color = "grey", linetype = "dashed") +
+  # geom_hline(yintercept = seq(floor(range(pd$CTLA4)[1]), ceiling(range(pd$CTLA4)[2]), by = 1), color = "grey", linetype = "dashed") +
+
+  geom_point(shape=21,fill="white",size=1.5)+
+  geom_text(aes(label = gene), vjust = -0.5, hjust = 0.5, size = 2.5,color=ifelse(pd$gene %in% c("PDCD1","CTLA4"),"darkred","gray20"))+
+  theme_pubr()+
+    geom_polygon(data = polygon_data, aes(x = x, y = y), fill = "darkred", alpha = 0.2) +
+
+  labs(x="Rank(PDCD1)",y="Rank(CTLA4)")+
+  theme( panel.border = element_rect(colour = "black", fill = NA ),axis.text = element_text(size = 7) , legend.position = "none" ,axis.title = element_text(size=9))
+
+
+
+immune_cells <- c("T-cells","B-cells","Plasma cells","NK-cells","granulocytes","monocytes","Macrophages","Hofbauer cells","Kupffer cells","dendritic cells","Langerhans cells")
+df_single_cell <- read.csv("data/rna_single_cell_type.tsv",sep="\t",check.names = F)
+df_single_cell <- df_single_cell[df_single_cell$`Gene name`=="ICOS",]
+df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells,]
+
+p_ICOS <- ggplot(df_single_cell,aes(`Cell type`,nTPM,fill=`Cell type`))+
+  geom_col()+
+  theme_pubr()+ 
+  theme( axis.text = element_text(size=7 ),axis.text.x = element_text( angle = 90,hjust = 1), axis.title = element_text(size = 9),legend.position = "none",axis.title.x = element_blank())
+
+
+df_single_cell <- read.csv("data/rna_single_cell_type.tsv",sep="\t",check.names = F)
+df_single_cell <- df_single_cell[df_single_cell$`Gene name`=="ICOSLG",]
+df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells,]
+
+p_ICOSLG <- ggplot(df_single_cell,aes(`Cell type`,nTPM,fill=`Cell type`))+
+  geom_col()+
+  theme_pubr()+ 
+  theme( axis.text = element_text(size=7 ),axis.text.x = element_text( angle = 90,hjust = 1), axis.title = element_text(size = 9),legend.position = "none",axis.title.x = element_blank())
+
+
+df_expr <- read.csv("data/expression_tpm.csv")
+colnames(df_expr)[1] <- "Run_ID"
+df_clin <-  read.csv("data/clin.csv")
+
+response_labels <- c("Complete Response"="CR","Partial Response"="PR","Stable Disease"="SD","Progressive Disease"="PD")
+df_clin[["Response"]] <- response_labels[df_clin[["Response"]]]
+# df_clin[["Response"]] <- as.integer(df_clin[["Response"]] )
+df_clin[["Response"]]  <- factor(df_clin[["Response"]] , levels = c("PD", "SD", "PR", "CR"))
+
+
+pd_ici <- merge(df_expr,df_clin,by="Run_ID")
+
+gene <- "ICOS"
+roc_ <- roc(pd_ici$Responder,pd_ici[[gene]],direction="<",levels=c(F,T))
+
+fpr <- roc_$specificities
+tpr <- roc_$sensitivities
+roc_data <- data.frame(FPR = 1 - fpr, TPR = tpr,gene=gene)
+p_roc <- ggplot(roc_data, aes(x = FPR, y = TPR)) +
+  geom_line(color = "#E64B35", linewidth = 1) +
+  theme_pubr()+
+  geom_abline(linetype = "dashed",color="gray20", linewidth = 1)+
+    annotate("text", x = 0.8, y = 0.2, label = paste("AUC =", round(auc(roc_), 2)), hjust = 1)+
+  theme(panel.border = element_rect(colour = "black", fill=NA, linewidth =1))+
+  theme(axis.text = element_text( size = 7),axis.title = element_text(size=9))
+
+###merge
+ (p_rank+p_roc)/(p_ICOS+p_ICOSLG) 
+ 
+```
+
+
+
+
