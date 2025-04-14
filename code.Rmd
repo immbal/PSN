@@ -1,620 +1,765 @@
 
-### figure2 
-###analysis three enrichment 
+## Figure 2
+### Pathway ranking for concordance enrichment analysis.
 ```{r}
-library(igraph)
-library(patchwork)
-library(ggsci)
-library(ggplot2)
-library(dplyr)
-library(tidyr)
-immune_pathways <- scan("data/immune_nodes.txt",character(),sep="\n")
-df_ci <- read.csv("data/enrich_CI.csv",sep="\t")
-df_degs <- read.csv("data/DGEs.csv",sep="\t")
-df_gsea <- read.csv("data/fgsea.csv",sep="\t")
+# Load required libraries
+library(ggplot2)    
+library(tidyverse) 
+library(ggpubr)   
+library(stringr)
+library(ggtext)    
 
-#### modularity
-outTab <- data.frame()
-for (cutoff in seq(5,200,5)) {
-  cis <- intersect(immune_pathways,df_ci[1:cutoff,"Reactome_ID"])
-  degs <- intersect(immune_pathways,df_degs[1:cutoff,"Reactome_ID"])
-  gseas <- intersect(immune_pathways,df_gsea[1:cutoff,"Reactome_ID"])
+# Load the pathway data for a detailed classification (e.g., PD, SD, PR, CR) 
+pathway_ci <- readRDS("data/four_states.rds")
+# Filter pathways with a confidence index (CI) >= 0.6
+four_state_pathways <- pathway_ci[pathway_ci$CI >= 0.6, "Reactome_ID"]
 
-  outTab <- rbind(outTab,cbind(cutoff=cutoff,CEA=length(cis),DGE=length(degs),GSEA=length(gseas)))
+# Load the pathway data for a binary classification (e.g., responder vs. non-responder)
+pathway_ci <- readRDS("data/two_states.rds")
+# Filter pathways with CI >= 0.6
+two_state_pathways <- pathway_ci[pathway_ci$CI >= 0.6, "Reactome_ID"]
+
+# Combine the two sets of pathways (from both classifications) and remove duplicates
+unique_pathways <- unique(c(two_state_pathways, four_state_pathways))
+
+# Load pathway names and other metadata from a Reactome pathways file
+df_nodes <- read.csv("data/ReactomePathways.txt", check.names = F, header = F, col.names = c("path_ID", "path_Name", "src"), sep = "\t")
+# Filter for pathways related to Homo sapiens
+df_nodes <- df_nodes[df_nodes$src == "Homo sapiens",]
+# Extract the pathway names
+nodes <- df_nodes$path_Name
+# Assign pathway names to the pathway IDs
+names(nodes) <- df_nodes$path_ID
+
+# Prepare a data frame containing pathway IDs, descriptions, and classification for plotting
+ggdata <- data.frame(Reactome_ID = unique_pathways,
+                     description = nodes[unique_pathways],
+                     two_state = ifelse(unique_pathways %in% two_state_pathways, 1, 0),
+                     four_state = ifelse(unique_pathways %in% four_state_pathways, 1, 0))
+
+# Sort the data by the 'four_state' column (non-decreasing order)
+ggdata <- ggdata[order(ggdata$four_state, decreasing = F),]
+
+# Format pathway descriptions for better visualization (include Reactome ID in the description)
+ggdata$description <- paste0("[", ggdata$Reactome_ID, "]<br/>", ggdata$description)
+ggdata$description <- sapply(ggdata$description, function(x) {
+  ifelse(nchar(x) > 72, paste0(substr(x, 1, 70), "..."), x)
+})
+
+# Ensure that 'description' is treated as a factor to maintain the correct order in the plot
+ggdata$description <- factor(ggdata$description, levels = unique(ggdata$description))
+
+# Create a new column 'row' to assign a numerical value to each description for ordering purposes
+ggdata$row <- as.numeric(ggdata$description)
+
+# -------------------------------------------------------------  
+# Create a plot to compare the detailed classification (PD/SD/PR/CR) vs binary classification (R/NR)
+p_two_vs_four <- ggdata %>%
+  pivot_longer(cols = c(two_state, four_state), names_to = "state_type", values_to = "state") %>%
+  ggplot(aes(state_type, description, color = factor(state), fill = factor(state))) +
+  # Add tiles to visually separate categories
+  geom_tile(aes(fill = factor(row %% 2)), colour = "white", width = Inf, height = 1, alpha = 0.2) +
+  geom_point(size = 2) +
+  scale_fill_manual(values = c("gray80", "#97BBD7")) +
+  scale_color_identity() +
+  theme_classic() +
+  scale_y_discrete(limits = ggdata$description) +
+  scale_x_discrete(labels = c("Response: detailed classification", "Response: responder vs. non-responder")) +
+  theme(axis.title = element_blank(),
+        axis.text = element_markdown(size = 7),
+        legend.position = "none",
+        panel.border = element_rect(color = "gray70", fill = NA, linewidth = 1),
+        axis.line = element_blank())
+
+# -------------------------------------------------------------  
+# Display the plot
+p_two_vs_four
+
+  
+```
+
+## Figure 3 
+### Evaluating the functional clustering of ranked pathways across approaches. 
+```{r}
+# Load necessary libraries for data manipulation, visualization, and graph creation
+library(patchwork)   
+library(ggsci)       
+library(ggplot2)     
+library(dplyr)       
+library(tidyr)       
+
+# Load immune-related pathways from a text file
+immune_pathways <- scan("data/immune_nodes.txt", character(), sep="\n")
+
+# Read pathway data 
+df_ci <- read.csv("data/enrich_CI.csv", sep="\t")  # CEA (Concordance Enrichment Analysis) data
+df_degs <- read.csv("data/DGEs.csv", sep="\t")    # DGE (Differential Gene Expression) data
+df_gsea <- read.csv("data/fgsea.csv", sep="\t")   # GSEA (Gene Set Enrichment Analysis) data
+
+# ----------------------------------------------
+# Gene set recall for the following pathway
+outTab <- data.frame()  # Initialize an empty data frame to store results
+
+# Loop through different cutoff values to evaluate gene set recall
+for (cutoff in seq(5, 200, 5)) {
+  # Get the intersecting pathways between immune pathways and the top N pathways for each method
+  cis <- intersect(immune_pathways, df_ci[1:cutoff, "Reactome_ID"])
+  degs <- intersect(immune_pathways, df_degs[1:cutoff, "Reactome_ID"])
+  gseas <- intersect(immune_pathways, df_gsea[1:cutoff, "Reactome_ID"])
+  outTab <- rbind(outTab, cbind(cutoff = cutoff, CEA = length(cis), DGE = length(degs), GSEA = length(gseas)))
 }
 
-p_pathways <- outTab %>% pivot_longer(cols = 2:4,
-                        names_to = "Ranking",
-                        values_to = "Count") %>%mutate(ranking=factor(Ranking,levels=c("CEA","DGE","GSEA"))) %>% 
+# Create a plot for gene set recall across different ranking methods (CEA, DGE, GSEA)
+p_recall <- outTab %>% pivot_longer(cols = 2:4,
+                                    names_to = "Ranking",
+                                    values_to = "Count") %>%
+  mutate(ranking = factor(Ranking, levels = c("CEA", "DGE", "GSEA"))) %>%
   ggplot(aes(cutoff, Count, color = Ranking)) +
-  geom_line(linewidth=1) +
-  geom_point(shape=21,fill="white") +
-  theme_pubr()+
-  labs(x="TopN Pathways",color="Ranking")+
-  theme(axis.text = element_text(size=7),axis.title = element_text(size=9),legend.text = element_text(size=7),legend.title = element_text(size=9))+
+  geom_line(linewidth = 1) +  
+  geom_point(shape = 21, fill = "white") +  
+  theme_pubr() +
+  labs(x = "TopN Pathways", color = "Ranking") +
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9), 
+        legend.text = element_text(size = 7), legend.title = element_text(size = 9)) +
   scale_color_npg()
 
+# -------------------------------------------------------------
+# Pathway modularity for the top n pathways as n increases
 
-#### modularity
-df_edges <- read.csv("data/ReactomePathwaysRelation.txt",sep="\t",header = FALSE,col.names = c("parent","child"))
-df_edges <- df_edges[df_edges$parent %in%immune_pathways, ]
-df_edges <- df_edges[df_edges$child %in%immune_pathways, ]
+# Read the pathway relationship data for Reactome pathways
+df_edges <- read.csv("data/ReactomePathwaysRelation.txt", sep = "\t", header = FALSE, col.names = c("parent", "child"))
+# Filter for pathways that are in the immune pathways list
+df_edges <- df_edges[df_edges$parent %in% immune_pathways, ]
+df_edges <- df_edges[df_edges$child %in% immune_pathways, ]
 
-g <- graph_from_data_frame(d=df_edges,directed = F)
-calc_modularity <- function(nodes){
-  V(g)$state <- ifelse(V(g)$name%in% nodes,1,0 )
-  subgraph <- induced_subgraph(g,V(g)[state==1])
-  community <- cluster_walktrap(subgraph)
-  modularity_value <- modularity(community)
+# Create a graph object from the pathway edges
+g <- graph_from_data_frame(d = df_edges, directed = F)
+
+# Function to calculate the modularity of a subgraph based on pathway nodes
+calc_modularity <- function(nodes) {
+  V(g)$state <- ifelse(V(g)$name %in% nodes, 1, 0)  # Set the state of nodes based on whether they are in the given list
+  subgraph <- induced_subgraph(g, V(g)[state == 1])  # Create subgraph for selected nodes
+  community <- cluster_walktrap(subgraph)  # Perform community detection using walktrap
+  modularity_value <- modularity(community)  # Calculate modularity of the detected community
   return(modularity_value)
 }
 
-outTab <- data.frame()
-for (cutoff in seq(5,30,5)) {
-  cis <- intersect(immune_pathways,df_ci[1:cutoff,"Reactome_ID"])
-  degs <- intersect(immune_pathways,df_degs[1:cutoff,"Reactome_ID"])
-  gseas <- intersect(immune_pathways,df_gsea[1:cutoff,"Reactome_ID"])
-  outTab <- rbind(outTab,cbind(cutoff=cutoff,CEA=calc_modularity(cis),DGE=calc_modularity(degs),GSEA=calc_modularity(gseas)))
+outTab <- data.frame()  # Initialize an empty data frame to store results
+
+# Loop through different cutoff values to evaluate modularity for each ranking method
+for (cutoff in seq(5, 30, 5)) {
+  # Get the intersecting pathways between immune pathways and the top N pathways for each method
+  cis <- intersect(immune_pathways, df_ci[1:cutoff, "Reactome_ID"])
+  degs <- intersect(immune_pathways, df_degs[1:cutoff, "Reactome_ID"])
+  gseas <- intersect(immune_pathways, df_gsea[1:cutoff, "Reactome_ID"])
+  
+  # Calculate modularity for each method
+  outTab <- rbind(outTab, cbind(cutoff = cutoff, CEA = calc_modularity(cis), DGE = calc_modularity(degs), GSEA = calc_modularity(gseas)))
 }
 
-p_modularity <-  outTab %>% pivot_longer(cols = 2:4,
-                        names_to = "Ranking",
-                        values_to = "Modularity") %>%mutate(ranking=factor(Ranking,levels=c("CEA","DGE","GSEA"))) %>% 
+# Create a plot for pathway modularity across different ranking methods (CEA, DGE, GSEA)
+p_modularity <- outTab %>% pivot_longer(cols = 2:4,
+                                        names_to = "Ranking",
+                                        values_to = "Modularity") %>%
+  mutate(ranking = factor(Ranking, levels = c("CEA", "DGE", "GSEA"))) %>%
   ggplot(aes(cutoff, Modularity, color = Ranking)) +
-  geom_line(linewidth=1) +
-  geom_point(shape=21,fill="white") +
-  theme_pubr()+
-    labs(x="TopN Pathways",color="Ranking")+
-  theme(axis.text = element_text(size=7),axis.title = element_text(size=9),legend.text = element_text(size=7),legend.title = element_text(size=9))+
-  scale_color_npg()
-
- 
-p_modularity + 
- p_pathways  
- 
-```
-
-### figure3 
-###gene set perspective
-```{r}
-library(readr)
-library(ggpubr)
-library(ggplot2)
-library(ggsci)
-library(patchwork)
-
-load_sigs <- function(gmtfile="data/ReactomePathways.gmt" ){ 
-  reactome_sigs <- list()
-  gmt_data <- read_lines(gmtfile)
-  for (line in gmt_data) {
-    parts <- strsplit(line, "\t")[[1]]
-    pathway_id <- parts[2]    
-    gene_list <- parts[3:length(parts)]  
-    reactome_sigs[[pathway_id]] <- gene_list
-  }
-  return(reactome_sigs)
-}
-output_gene_setdistance <- function(df,ranking_name,topn=30){
-    current <- df$Reactome_ID[1]
-    outTab <- data.frame()
-    for (i in 1:30) {
-      id <- df$Reactome_ID[i]
-      common_genes <- intersect(nodes[[current]], nodes[[id]])
-      all_genes <- union(nodes[[current]], nodes[[id]])
-      outTab <- rbind(outTab, cbind(Rank=i,
-                                    Jaccard=length(common_genes)/length(all_genes), 
-                                    Coverage=length(common_genes)/length(nodes[[current]]),
-                                    ranking=ranking_name ))
-    }
-    return(outTab)
-  
-}
-
-nodes <- load_sigs()
-df_degs <- read.csv("data/DGEs.csv",sep="\t")
-distance_dge <- output_gene_setdistance(data.frame(Reactome_ID=df_degs$Reactome_ID),
-                                             ranking_name="DGE", )
-
-df_gsea <- read.csv("data/fgsea.csv",sep="\t")
-distance_gsea <- output_gene_setdistance(data.frame(Reactome_ID=df_gsea$Reactome_ID),
-                                             ranking_name="GSEA", )
-df_ci <- readRDS("data/four_states.rds")
-distance_cea <- output_gene_setdistance(data.frame(Reactome_ID=df_ci$Reactome_ID),
-                                             ranking_name="CEA", )
-outTab <- rbind(rbind(distance_dge,distance_gsea),distance_cea)
-outTab$ranking <- factor(outTab$ranking,levels = c("CEA","DGE","GSEA"))
-outTab$Rank <- as.numeric(outTab$Rank)
-outTab$Jaccard <- as.numeric(outTab$Jaccard)
-outTab$Coverage <- as.numeric(outTab$Coverage)
-
-
-
-p1 <- ggplot(outTab,aes(Rank,Jaccard, color=ranking))+
-  geom_line(linewidth=1,)+
-  geom_point(shape=21,fill="white" )+
-  theme_pubr()+
-  geom_vline(xintercept = 7,linetype="dashed",color="#DC0000FF")+
-  # geom_segment(aes(x = 7, xend = 7, y = 0, yend = 0.5), color = "darkred" )+
-  theme( axis.text = element_text(size=7) ,axis.title.y = element_text(size=9),axis.line = element_blank(),axis.title.x = element_blank(),
-         panel.border = element_rect(colour = "gray20", fill=NA, linewidth=1),
-          
-         legend.position = "none") +
-  facet_wrap(ranking~.)+
-  scale_color_npg()
-
-
-p2 <- ggplot(outTab,aes(Rank,Coverage, color=ranking ))+
-  geom_line(linewidth=1 )+
-  geom_point(shape=21,fill="white" )+
-  theme_pubr()+
-  geom_vline(xintercept = 7,linetype="dashed",color="#DC0000FF")+
-  theme( axis.text = element_text(size=7) ,axis.line = element_blank(),axis.title = element_text(size=9),
-         panel.border = element_rect(colour = "gray20", fill=NA, linewidth=1),legend.position = "none") +
-  facet_wrap(ranking~.)+  
-  scale_color_npg()
- 
-p1/p2 
- 
-```
-### figure4 
-### tree perspecitve
-```{r}
-library(igraph)
-library(ggraph)
-library(ggsci)
-df <- read.csv("data/immune_relation.csv",col.names = c("from","to"))
- 
-g <- graph_from_data_frame(df,directed = F)
-selected_nodes <- c("R-HSA-202427","R-HSA-202430","R-HSA-389948","R-HSA-388841","R-HSA-202433","R-HSA-202403" )
-
-V(g)$color <- factor(ifelse(V(g)$name  %in% selected_nodes, "selected", "unselected"))
-  
-V(g)$shape <- factor(ifelse(V(g)$name == "R-HSA-202427", "seed",  "other"))
-V(g)$size <- ifelse(V(g)$name  %in% selected_nodes,1.5, 1)
-p_tree <- ggraph(g, layout = "tree") + 
-  geom_edge_diagonal(color="gray80") + 
-  geom_node_point( aes(shape=shape,color=color) ,fill = "white", size = V(g)$size) + 
-    geom_node_text(aes(label = ifelse(name  %in% c("R-HSA-168256","R-HSA-202427"), name, "")), vjust = 2.0, hjust = 0,size=2,color="gray20") + 
-  theme_void()+
-theme(legend.position = "bottom" , axis.text = element_text(size=7 ),  legend.title  = element_text(size=9),legend.text=element_text(size=7),legend.key.height = unit(0.15,"cm"),axis.title = element_blank(), legend.key.width = unit(0.5,"cm"),axis.text.x = element_blank(), panel.background = element_rect(fill = alpha("#F9D461",0.1), colour = NA),   legend.key  = element_blank())+
-  scale_color_npg()
-
-
-out_semantic_distance <- function(g,g_edges,df_ranking,ranking_name){
-      start_node <- df_ranking$Reactome_ID[1]
-      all_nodes <- V(g)$name
-      paths <- shortest_paths(g, from = start_node, to = all_nodes, output = "vpath")
-       
-      path_from_seed_list <- list()
-      
-      for (path in paths$vpath) {
-        if (length(path) > 1) {
-          edge_seq <- c()
-          for (i in 1:(length(path) - 1)) {
-            edge <- paste(V(g)$name[path[i]], "_", V(g)$name[path[i + 1]], sep = "")
-            edge_seq <- c(edge_seq,edge)
-          }
-          path_from_seed_list[[V(g)$name[path[length(path)]]]] <- edge_seq
-        }
-      }
-      
-      forward_edges <- apply(g_edges, 1, function(x){paste(c(x[1],x[2]),collapse = "_")})
-      backward_edges <- apply(g_edges, 1, function(x){paste(c(x[2],x[1]),collapse = "_")})
-      
-      edge_score <- c(rep(0,length(forward_edges)),rep(1,length(backward_edges)))
-      names(edge_score) <- c(forward_edges,backward_edges)
-      
-      outTab <- data.frame()
-      outTab <- rbind(outTab,cbind(Rank=1,Distance=0,ranking=ranking_name))
-      for (pos in 2:30) {
-        node <- df_ranking$Reactome_ID[pos]
-        if (node %in% names(path_from_seed_list)) {
-            edge_seq <- path_from_seed_list[[node]]
-        energy <- sum(edge_score[edge_seq])
-        }else{
-          energy <- 10
-        }
-        outTab <- rbind(outTab,cbind(Rank=pos,Distance=energy,ranking=ranking_name))
-      }
-      return(outTab)
-}
-
-
-df_degs <- read.csv("data/DGEs.csv",sep="\t")
- 
-distance_dge <- out_semantic_distance(g,df,data.frame(Reactome_ID=df_degs$Reactome_ID),
-                                              ranking_name="DGE"  )
-
-df_gsea <- read.csv("data/fgsea.csv",sep="\t")
-distance_gsea <- out_semantic_distance(g,df,data.frame(Reactome_ID=df_gsea$Reactome_ID),
-                                             ranking_name="GSEA"  )
-df_ci <- readRDS("data/four_states.rds")
-distance_cea <- out_semantic_distance(g,df,data.frame(Reactome_ID=df_ci$Reactome_ID),
-                                             ranking_name="CEA"  )
-outTab <- rbind(rbind(distance_dge,distance_gsea),distance_cea)
-outTab$ranking <- factor(outTab$ranking,levels = c("CEA","DGE","GSEA"))
-outTab$Rank <- as.numeric(outTab$Rank)
-outTab$Distance <- as.numeric(outTab$Distance)
-
-
-p_height <- outTab %>% ggplot(aes(Rank, Distance,color=ranking)) +
-  geom_line( linewidth=1) +
-  geom_point(shape = 21, fill = "white" ) +
-  scale_y_continuous(limits = c(0, 10), breaks = seq(0, 10, 3)) +
-  geom_hline(yintercept = 3, color = "darkred",linetype="dashed") +
+  geom_line(linewidth = 1) + 
+  geom_point(shape = 21, fill = "white") + 
   theme_pubr() +
-  theme( axis.text = element_text(size=7) ,axis.line = element_blank(),
-         panel.border = element_rect(colour = "gray20", fill=NA, linewidth=1),
-         axis.title = element_text(size=9),
-         legend.position = "none")+
-  facet_wrap(ranking~.)+  
+  labs(x = "TopN Pathways", color = "Ranking") +
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9), 
+        legend.text = element_text(size = 7), legend.title = element_text(size = 9)) +
   scale_color_npg()
 
- p_height/p_tree 
+# -------------------------------------------------------------
+# Combine the two plots (modularity and recall) into one figure
+p_modularity + p_recall
+
+ 
 ```
 
-### figure5
-###abstract sub-network
+## Figure 4
+### Comparative evaluation of ranked pathways for immunotherapy outcome.
 ```{r}
-library(igraph)
-library(ggplot2)
-library(dplyr)
-library(data.table) 
-library(stringr)
-library(ggpubr)
-library(ggsci)
-library(pROC)
-library(tibble)
-library(ggbeeswarm)
+# Load required libraries
+library(pROC)       
+library(ggsci)     
 
+# Load datasets for CI, DGE, GSEA, and pathway activity (phenotype data)
+df_ci <- read.csv("data/enrich_CI.csv", sep="\t")  # CEA (Concordance Enrichment Analysis) data
+df_degs <- read.csv("data/DGEs.csv", sep="\t")    # DGE (Differential Gene Expression) data
+df_gsea <- read.csv("data/fgsea.csv", sep="\t")   # GSEA (Gene Set Enrichment Analysis) data
+df_pdata <- readRDS("data/pathway_activity_phenotype.rds")  # Pathway activity data related to phenotypes
 
-df_interactions <- fread("data/9606.protein.physical.links.v12.0.txt.gz", sep = " ")
-df_proteins <- fread("data/9606.protein.info.v12.0.txt.gz", sep = "\t", col.names = c("protein_id", "preferred_name", "protein_size", "annotation"))
+# Define the top 10 pathways from each dataset (CEA, DGE, GSEA)
+topPathways <- list(CEA = df_ci$Reactome_ID[1:10], DGE = df_degs$Reactome_ID[1:10], GSEA = df_gsea$Reactome_ID[1:10])
 
-
-pd_merged <- merge(df_interactions, df_proteins[, .(protein_id, preferred_name)], by.x = "protein1", by.y = "protein_id", all.x = TRUE)
-pd_merged <- merge(pd_merged, df_proteins[, .(protein_id, preferred_name)], by.x = "protein2", by.y = "protein_id", all.x = TRUE, suffixes = c("_x", "_y"))
-
-pd_merged <- pd_merged[, .(preferred_name_x, preferred_name_y, combined_score)]
-setnames(pd_merged, c("preferred_name_x", "preferred_name_y", "combined_score"), c("gene1", "gene2", "score"))
-pd_merged <- pd_merged[score >= 700]
-
-pd_merged[["pair"]] <-  apply(pd_merged, 1, function(row) paste(sort(c(row[[1]],row[[2]])), collapse = "_"))
-pd_merged <- pd_merged[!duplicated(pd_merged$pair),]
- 
-icb_genes <- readRDS("data/icb_genes.rds")
-pd_merged <- pd_merged[gene1 %in% icb_genes & gene2 %in% icb_genes]
-
-
-g <- graph_from_data_frame(pd_merged, directed = FALSE)
-print(paste("Nodes:", vcount(g), "Edges:", ecount(g)))
- 
-deg <- degree(g)
-qplot(deg, bins = 1000, xlab = "Degree", ylab = "Frequency")
- 
-s <- components(g)
-g_0 <- induced_subgraph(g, which(s$membership == 1))
-
-top_genes <- fread("data/reactome_top_pathways.txt", header = FALSE)$V1
-
-sub <- induced_subgraph(g_0, which(V(g_0)$name %in% top_genes))
-
-s <- components(sub)
-subgraph_0 <- induced_subgraph(sub, which(s$membership == 1))
-
-bet <- betweenness(subgraph_0, directed = FALSE,normalized = T)
-ggdata <- data.frame(gene=names(bet),betweenness=unlist(bet))
-ggdata <- ggdata[order(ggdata$betweenness,decreasing = T),][1:10,]
-
-p_bet <- ggplot(ggdata,aes(gene,betweenness,fill=gene))+
-  geom_histogram(stat = "identity")+
-  theme_pubr()+
-theme(axis.title.x = element_blank(),axis.text.x = element_text(angle=90))+
-    theme(axis.text = element_text( size = 7),axis.title  = element_text(size=9),legend.position = "none")+
-  scale_color_npg()
- 
-
-### ZAP70 expression
-pd_ici <- readRDS("data/expression_tpm.rds")
-
-ggdata <- data.frame(ZAP70=log2(pd_ici$ZAP70+0.001),ICOS=log2(pd_ici$ICOS+0.001),responder=ifelse(pd_ici$Responder,"R","NR"),response=pd_ici$Response)
- 
-p_zap70 <- ggplot(ggdata,aes(response,ZAP70,color=response))+
-  geom_boxplot(width=0.5,outlier.size=0.4,outlier.alpha = 0.6 )+
-  stat_compare_means(comparisons = list(c("PD","SD"),c("PD","PR"),c("PD","CR")) ,size=2.5 )+ 
-  theme_pubr()+
-  labs(y="log2(ZAP70+0.001)")+
-  theme(legend.position = "none",axis.title.x = element_blank() )+
-  theme(axis.text = element_text( size =7),axis.title  = element_text(size=9)) +
-  geom_beeswarm(alpha=0.4,cex=1,size=0.5  )+
-  scale_color_npg()
-
-###single cell
-immune_cells <- c("T-cells","B-cells","Plasma cells","NK-cells","granulocytes","monocytes","Macrophages","Hofbauer cells","Kupffer cells","dendritic cells","Langerhans cells")
-df_single_cell <- read.csv("data/rna_single_cell_type.tsv",sep="\t",check.names = F)
-df_single_cell <- df_single_cell[df_single_cell$`Gene name`=="ZAP70",]
-df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells,]
-
-p_single_cell <- ggplot(df_single_cell,aes(`Cell type`,nTPM,fill=`Cell type`))+
-  geom_col()+
-  theme_pubr()+ 
-  theme( axis.text = element_text(size=7 ),axis.text.x = element_text( angle = 90,hjust = 1), axis.title = element_text(size = 9),legend.position = "none",axis.title.x = element_blank())
-
-### figure TME
-df_cibersort <- read.csv("data/cibersort.csv",check.names = F )
-
-pd_ZAP70 <- data.frame(Run_ID=rownames(pd_ici),ZAP70=pd_ici$ZAP70)
-pd_merged <- merge(df_cibersort,pd_ZAP70,by="Run_ID")
-pd_merged[["ZAP70"]] <- log2(pd_merged[["ZAP70"]]+1)
-pd_merged <- column_to_rownames(pd_merged,var="Run_ID")
-colnames(pd_merged) <- gsub("_CIBERSORT","",colnames(pd_merged) )
-
-pd_merged <- pd_merged[,grepl("T_|NK_|ZAP70",colnames(pd_merged))]
-
-
-cell_correlation <- cor(pd_merged)
-
-
+# Initialize an empty data frame to store the AUC results
 ggdata <- data.frame()
-for (cell in colnames(pd_merged)) {
-  test <- cor.test(pd_merged$ZAP70, pd_merged[[cell]])
-  ggdata <- rbind(ggdata,cbind(Cell1="ZAP70",Cell2=cell,Correlation=test$estimate,pvalue=test$p.value))
-}
-ggdata[["Correlation"]] <- as.numeric(ggdata[["Correlation"]]) 
-ggdata[["pvalue"]] <- as.numeric(ggdata[["pvalue"]]) 
 
-ggdata <- ggdata %>% arrange(desc(Correlation)) %>% 
-  mutate(Significance = case_when(
-    pvalue < 0.001 ~ "***",
-    pvalue < 0.01 ~ "**",
-    pvalue < 0.05 ~ "*",
-    TRUE ~ "ns"
-  ))
-
-p_tme <- ggplot(ggdata,aes(Cell1 ,factor(Cell2,levels =rev(Cell2)  ),Correlation, fill=Correlation))+
-  geom_tile(width=0.95,height=1.2)+
-  geom_text(aes(label = round(Correlation, 2)), color = "gray20", size = 2.5)+
-  geom_text(aes(label = Significance, x =1.2), hjust = 0, size = 2.5) +
-  scale_fill_gradient2(low = "#0C6291", high = "#A63446", mid = "#FBFEF9", midpoint = 0)+
-  theme_pubr()+
-  theme(axis.line = element_blank(),axis.ticks = element_blank(),axis.text = element_text(size=7 ),  legend.title = element_text(size=7),legend.text=element_text(size=4.5),legend.key.height = unit(0.15,"cm"),axis.title = element_blank(),legend.position = c(0,-0.25),legend.direction = "horizontal",legend.key.width = unit(0.5,"cm") )
-
-
-###merge 
- (p_bet|p_zap70)/
-  (p_single_cell|p_tme) 
-```
-
-
-###Figure6
-
-#local entropy of the node
-```{r}
-library(ggsci)
-library(ggplot2)
-library(dplyr)
-library(igraph)
-library(data.table)
-library(tibble)
-library(ggpubr)
-library(patchwork)
-df_expr <- read.csv("data/expression_tpm.csv" ,row.names = 1,check.names = F)
-df_expr <- log2(df_expr+1)
-
-df_clin <- read.csv("data/clin.csv")
-CR_samples <- df_clin[df_clin$Response=="Complete Response",  ][["Run_ID"]]
-PR_samples <- df_clin[df_clin$Response=="Partial Response",  ][["Run_ID"]]
-SD_samples <- df_clin[df_clin$Response=="Stable Disease",  ][["Run_ID"]]
-PD_samples <- df_clin[df_clin$Response=="Progressive Disease",  ][["Run_ID"]]
-net_corr <- function(expmatrix,adj_matrix){
-  df_corr  <- 0.5*(cor(expmatrix)+1)
-  df_corr  <- df_corr [rownames(adj_matrix),rownames(adj_matrix)] *adj_matrix
-  return(df_corr)
+# Loop through each ranking method (CEA, DGE, GSEA) and each of their top 10 pathways
+for (item in names(topPathways)) {
+  for (p in topPathways[[item]]) {
+    # Calculate ROC curve and AUC for each pathway using responder status
+    roc <- roc(df_pdata[["Responder"]], df_pdata[[p]], direction=">", levels=c(1, 0))
+    auc_ <- auc(roc)  # Calculate AUC value
+    ggdata <- rbind(ggdata, cbind(PATH = p, TYPE = item, AUC = auc_))
+  }
 }
 
-net_entropy <- function(expmatrix,adj_matrix){
-  degrees <- apply(adj_matrix, 1, sum)
-  df_net  <- 0.5*(cor(expmatrix)+1)
-  df_net  <- df_net [rownames(adj_matrix),rownames(adj_matrix)] *adj_matrix
-  w_  <- df_net/apply ( df_net ,1,sum  )
-  p_ <- w_
-  p_[p_>0] <- log( p_[p_>0]) 
-  w_entropy  <- apply( w_ * p_, 1, sum)
-  w_entropy <- ifelse(degrees>1,-1/(log(degrees)),0) *w_entropy
-  return(w_entropy)
+# Add a rank column (1 to 10) to ggdata for plotting
+ggdata[["RANK"]] <- c(1:10, 1:10, 1:10)
+
+# Create a ggplot for visualizing AUC values across the top 10 pathways for each ranking method
+p1 <- ggplot(ggdata, aes(RANK, as.double(AUC), color = TYPE)) +
+  geom_segment(aes(x = RANK - 0.4, xend = RANK + 0.4, y = as.double(AUC), yend = as.double(AUC)), linewidth = 0.8) +   
+  geom_point(shape = 21, fill = "white", size = 1.5) +  
+  facet_wrap(TYPE ~ ., scales = "free_x") +  
+  theme_pubr() +
+  labs(y = "AUC", x = "Top10 pathways") +  
+  theme(axis.text = element_text(size = 7), axis.title.y = element_text(size = 9), axis.line = element_blank(),
+        axis.ticks.length.x = unit(0.5, "mm"), axis.title.x = element_blank(),
+        panel.border = element_rect(colour = "gray20", fill = NA, linewidth = 1), legend.position = "none") +
+  scale_x_continuous(breaks = seq(1, 10, by = 1)) +
+  scale_color_npg()
+
+# -------------------------------------------------------------
+# Calculate C-index for each pathway and ranking method
+
+# Initialize a new data frame for storing C-index results
+ggdata <- data.frame()
+
+# Loop through each ranking method (CEA, DGE, GSEA) and each of their top 10 pathways
+for (item in names(topPathways)) {
+  for (p in topPathways[[item]]) {
+    # Create a survival object based on progression-free survival (PFS) data
+    s <- Surv(df_pdata[["PFS_d"]], df_pdata[["PFS_e"]])
+    # Calculate the C-index for each pathway
+    ci <- Hmisc::rcorr.cens(df_pdata[[p]], s)[["C Index"]]
+    ggdata <- rbind(ggdata, cbind(PATH = p, TYPE = item, CI = ci))
+  }
 }
-df_network <- read.csv( "data/neigbors_network.csv")[,c("from","to")] %>% distinct()
-g <- graph_from_data_frame(df_network,directed = F)
-adj_matrix <-as.matrix( get.adjacency(g))
 
-genes <- scan("data/subnetwork_genes.txt",character(),sep="\t")
+# Add a rank column (1 to 10) to ggdata for plotting
+ggdata[["RANK"]] <- c(1:10, 1:10, 1:10)
 
-entroy_CR <- net_entropy(df_expr[CR_samples,genes],adj_matrix)
-entroy_PR <- net_entropy(df_expr[PR_samples,genes],adj_matrix)
-entroy_PD <- net_entropy(df_expr[PD_samples,genes],adj_matrix)
-entroy_SD <- net_entropy(df_expr[SD_samples,genes],adj_matrix)
-
-# PTPRC
-
-
-ggdata <- data.frame(entropy=c(entroy_CR,entroy_PR,entroy_SD,entroy_PD),responder=c(rep("CR",length(entroy_CR)),
-                                                                                    rep("PR",length(entroy_PR)),
-                                                                                    rep("SD",length(entroy_SD)),
-                                                                                    rep("PD",length(entroy_PD))) )
-
-ggplot(ggdata[ggdata$entropy>0,],aes(responder,entropy))+
-  geom_violin()+
-  geom_boxplot(width=0.2)+
-  theme_pubr()+
+# Create a ggplot for visualizing C-index values across the top 10 pathways for each ranking method
+p2 <- ggplot(ggdata, aes(RANK, as.double(CI), color = TYPE)) +
+  geom_segment(aes(x = RANK - 0.4, xend = RANK + 0.4, y = as.double(CI), yend = as.double(CI)), linewidth = 0.8) +   
+  geom_point(shape = 21, fill = "white", size = 1.5) + 
+  facet_wrap(TYPE ~ ., scales = "free_x") + 
+  theme_pubr() +
+  labs(y = "C-index", x = "Top10 pathways") +  
+  theme(axis.text = element_text(size = 7), axis.title.y = element_text(size = 9), axis.line = element_blank(),
+        axis.ticks.length.x = unit(0.5, "mm"), panel.border = element_rect(colour = "gray20", fill = NA, linewidth = 1),
+        legend.position = "none") +
+  scale_x_continuous(breaks = seq(1, 10, by = 1)) +
   scale_color_npg()
 
+# -------------------------------------------------------------
+# Combine the two ggplot objects into one plot
+p1 / p2   
 
-entroy_R <- net_entropy(df_expr[c(CR_samples,PR_samples),genes],adj_matrix)
-entroy_NR <- net_entropy(df_expr[c(PD_samples,SD_samples),genes],adj_matrix)
-ggdata <- data.frame(entropy=c(entroy_R,entroy_NR ),Responder=c(rep("R",length(entroy_R)),
-                                                                                    rep("NR",length(entroy_NR)) ))
-
-p_net_entropy <- ggplot(ggdata[ggdata$entropy>0,],aes(Responder,entropy,color=Responder))+
-  geom_violin()+
-  geom_boxplot(width=0.2)+  
-   
-  stat_compare_means(method = "t.test",comparisons = list(c("NR","R")),size=3)+
-  theme_pubr()+
-  theme(legend.position = "none",axis.text = element_text(size=7),axis.title = element_text(size=9))+
-  scale_color_npg()
-
-
-corr_R <- net_corr(df_expr[c(CR_samples,PR_samples),genes],adj_matrix)
-corr_NR <- net_corr(df_expr[c(PD_samples,SD_samples),genes],adj_matrix)
-
-corr_delta <- reshape2::melt(corr_R-corr_NR)
-colnames(corr_delta) <- c("src","tar","corr")
-p_corr_r <- ggplot(corr_delta,aes(src,tar,fill=corr))+
-  geom_tile()+
-  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, 
-                        space = "Lab", name = expression(Delta(corr)))+
-  theme(axis.text=element_text(size=2),axis.ticks = element_blank(),legend.key.width = unit(0.2,"cm"),panel.border = element_rect(fill = NA,color = "gray30"),axis.text.x = element_text(angle = 90,hjust = 1),axis.title = element_blank(),
-        legend.title = element_text(size=7),legend.text = element_text(size=5) 
-        )
-
-df_ici <- readRDS("data/ssGSEA.rds")
-p_path <- ggplot(df_ici,aes(Responder,`ssGSEA Score`,color=Responder))+
-  geom_boxplot()+
-  theme_pubr()+
-  scale_color_npg()+
-  theme(legend.position = "none",axis.text = element_text(size=7),axis.title = element_text(size=9))+
-  stat_compare_means(comparisons = list(c("NR","R")),size=3)+
-    theme(legend.position = "none" )+
-  theme(axis.text = element_text( size =7),axis.title  = element_text(size=9)) +
-  geom_beeswarm(alpha=0.4,cex=1,size=0.5  )+
-  scale_color_npg()
  
-  (p_cor_four+p_cor_bin)/
-  (p_net_entropy|p_path) 
+```
+
+## Figure 5
+### Pathway distance analysis based on concordance enrichment analysis.
+```{r}
+# Load necessary libraries for data visualization, graph manipulation, and analysis
+library(ggsci)   
+library(readr)  
+library(ggpubr)  
+library(ggplot2)  
+library(patchwork) 
+
+####################################################
+### Load Reactome Pathway Gene Signatures from GMT File
+####################################################
+# Define a function to load Reactome pathway gene signatures from a GMT file
+load_sigs <- function(gmtfile = "data/ReactomePathways.gmt") { 
+  reactome_sigs <- list()  # Initialize an empty list to store pathway gene sets
+  gmt_data <- read_lines(gmtfile)  # Read the GMT file
+  # Loop through each line in the GMT file and process it
+  for (line in gmt_data) {
+    parts <- strsplit(line, "\t")[[1]]  
+    pathway_id <- parts[2]  # Get the pathway ID
+    gene_list <- parts[3:length(parts)]  # Get the list of genes associated with the pathway
+    reactome_sigs[[pathway_id]] <- gene_list   
+  }
+  return(reactome_sigs)   
+}
+
+####################################################
+### Calculate gene set distance between the pathway and seed pathway based on the pathway network
+####################################################
+# Define a function to calculate gene set distances for the top n pathways
+output_gene_setdistance <- function(df, ranking_name, topn = 30) {
+  current <- df$Reactome_ID[1]  
+  outTab <- data.frame()   
+  # Loop through the top 30 pathways and calculate the gene set distance
+  for (i in 1:30) {
+    id <- df$Reactome_ID[i]   
+    common_genes <- intersect(nodes[[current]], nodes[[id]])   
+    all_genes <- union(nodes[[current]], nodes[[id]])   
+    outTab <- rbind(outTab, cbind(Rank = i, 
+                                  Jaccard = length(common_genes) / length(all_genes),  # Calculate Jaccard index
+                                  Coverage = length(common_genes) / length(nodes[[id]]),  # Calculate coverage
+                                  ranking = ranking_name))  # Store the ranking name
+  }
+  return(outTab)  
+}
+
+####################################################
+### Calculate semantic distance between the pathway and seed pathway based on the pathway network
+####################################################
+# Define a function to calculate the semantic distance based on pathway network structure
+out_semantic_distance <- function(g, g_edges, df_ranking, ranking_name) {
+  start_node <- df_ranking$Reactome_ID[1]  # Set the starting node as the first pathway in the ranking
+  all_nodes <- V(g)$name  # Get all the nodes in the graph
+  # Calculate shortest paths from the start node to all other nodes
+  paths <- shortest_paths(g, from = start_node, to = all_nodes, output = "vpath")
+  
+  path_from_seed_list <- list()  # Initialize an empty list to store edge sequences for each node
+  
+  # Loop through each path and store the edge sequence for each pathway
+  for (path in paths$vpath) {
+    if (length(path) > 1) {  # Only consider paths with more than one node
+      edge_seq <- c()  # Initialize an empty vector to store edge sequence
+      for (i in 1:(length(path) - 1)) {
+        edge <- paste(V(g)$name[path[i]], "_", V(g)$name[path[i + 1]], sep = "")  # Create edge string
+        edge_seq <- c(edge_seq, edge)  # Add the edge to the sequence
+      }
+      path_from_seed_list[[V(g)$name[path[length(path)]]]] <- edge_seq  # Store the edge sequence for the node
+    }
+  }
+  
+  # Generate forward and backward edges based on the pathway network
+  forward_edges <- apply(g_edges, 1, function(x) {paste(c(x[1], x[2]), collapse = "_")})
+  backward_edges <- apply(g_edges, 1, function(x) {paste(c(x[2], x[1]), collapse = "_")})
+  
+  # Assign scores to the edges (0 for forward edges, 1 for backward edges)
+  edge_score <- c(rep(0, length(forward_edges)), rep(1, length(backward_edges)))
+  names(edge_score) <- c(forward_edges, backward_edges)
+   
+  outTab <- data.frame()
+  # Add the starting node's distance (0) to the output table
+  outTab <- rbind(outTab, cbind(Rank = 1, Distance = 0, ranking = ranking_name))
+  
+  # Loop through the next 29 nodes and calculate the semantic distance for each
+  for (pos in 2:30) {
+    node <- df_ranking$Reactome_ID[pos]  # Get the pathway ID
+    if (node %in% names(path_from_seed_list)) {  # If the pathway exists in the path list
+      edge_seq <- path_from_seed_list[[node]]  # Get the edge sequence for the pathway
+      energy <- sum(edge_score[edge_seq])  # Calculate the total score for the pathway
+    } else {
+      energy <- 10  # If the pathway doesn't exist in the list, assign a high distance value
+    }
+    outTab <- rbind(outTab, cbind(Rank = pos, Distance = energy, ranking = ranking_name))
+  }
+  return(outTab)  
+}
+
+##########################
+### tree view (Visualization of the pathway network)
+##########################
+
+# Load the pathway relationship data (from file) to create a graph of pathway interactions
+df <- read.csv("data/immune_relation.csv", col.names = c("from", "to"))
+g <- graph_from_data_frame(df, directed = F)  # Create an undirected graph from the data frame
+# Define the selected nodes (the pathways of interest)
+selected_nodes <- c("R-HSA-202427", "R-HSA-202430", "R-HSA-389948", "R-HSA-388841", "R-HSA-202433", "R-HSA-202403")
+
+# Assign colors to the nodes based on whether they are selected or not
+V(g)$color <- factor(ifelse(V(g)$name %in% selected_nodes, "selected", "unselected"))
+
+# Set the shape and size of the nodes for visualization
+V(g)$shape <- factor(ifelse(V(g)$name == "R-HSA-202427", "seed", "other"))
+V(g)$size <- ifelse(V(g)$name %in% selected_nodes, 1.5, 1)
+
+# Create a tree plot of the pathway network
+p_tree <- ggraph(g, layout = "tree") + 
+  geom_edge_diagonal(color = "gray80") +  # Diagonal edges for tree layout
+  geom_node_point(aes(shape = shape, color = color), fill = "white", size = V(g)$size) +  # Nodes as points
+  geom_node_text(aes(label = ifelse(name %in% c("R-HSA-168256", "R-HSA-202427"), name, "")), vjust = 2.0, hjust = 0, size = 2, color = "gray20") +  # Labels for selected nodes
+  theme_void() +  # Remove axis and background for a clean view
+  theme(legend.position = "bottom", axis.text = element_text(size = 7), legend.title = element_text(size = 9), legend.text = element_text(size = 7), 
+        legend.key.height = unit(0.15, "cm"), axis.title = element_blank(), legend.key.width = unit(0.5, "cm"), axis.text.x = element_blank(), 
+        panel.background = element_rect(fill = alpha("#F9D461", 0.1), colour = NA), legend.key = element_blank()) +
+  scale_color_npg()
+
+# -------------------------------------------------------------  
+# Load pathway gene signatures from a pre-defined file
+nodes <- load_sigs()
+# Read the Differential Gene Expression (DGE) dataset
+df_degs <- read.csv("data/DGEs.csv", sep = "\t")
+# Calculate gene set distance for DGE pathways
+distance_dge <- output_gene_setdistance(data.frame(Reactome_ID = df_degs$Reactome_ID), ranking_name = "DGE")
+
+# Read the Gene Set Enrichment Analysis (GSEA) dataset
+df_gsea <- read.csv("data/fgsea.csv", sep = "\t")
+# Calculate gene set distance for GSEA pathways
+distance_gsea <- output_gene_setdistance(data.frame(Reactome_ID = df_gsea$Reactome_ID), ranking_name = "GSEA")
+
+# Read the CEA (Concordance Enrichment Analysis) dataset
+df_ci <- readRDS("data/four_states.rds")
+# Calculate gene set distance for CEA pathways
+distance_cea <- output_gene_setdistance(data.frame(Reactome_ID = df_ci$Reactome_ID), ranking_name = "CEA")
+
+# Combine all the distance data into one data frame
+outTab_geneset <- rbind(rbind(distance_dge, distance_gsea), distance_cea)
+outTab_geneset$ranking <- factor(outTab_geneset$ranking, levels = c("CEA", "DGE", "GSEA"))
+outTab_geneset$Rank <- as.numeric(outTab_geneset$Rank)
+outTab_geneset$Jaccard <- as.numeric(outTab_geneset$Jaccard)
+outTab_geneset$Coverage <- as.numeric(outTab_geneset$Coverage)
+
+### Begin calculating semantic distance
+# Calculate semantic distances for DGE, GSEA, and CEA pathways
+distance_dge <- out_semantic_distance(g, df, data.frame(Reactome_ID = df_degs$Reactome_ID), ranking_name = "DGE")
+distance_gsea <- out_semantic_distance(g, df, data.frame(Reactome_ID = df_gsea$Reactome_ID), ranking_name = "GSEA")
+distance_cea <- out_semantic_distance(g, df, data.frame(Reactome_ID = df_ci$Reactome_ID), ranking_name = "CEA")
+
+# Combine the semantic distance results into one data frame
+outTab_semantic <- rbind(rbind(distance_dge, distance_gsea), distance_cea)
+outTab_semantic$ranking <- factor(outTab_semantic$ranking, levels = c("CEA", "DGE", "GSEA"))
+outTab_semantic$Rank <- as.numeric(outTab_semantic$Rank)
+outTab_semantic$Distance <- as.numeric(outTab_semantic$Distance)
+
+# -------------------------------------------------------------  
+outTab <- outTab_geneset
+outTab[["Semantics"]] <- outTab_semantic$Distance
+
+# Plot Distance Metrics for Different Ranking Methods
+# Function to plot the distance metrics (Jaccard, Coverage, Semantics)
+plot_distance <- function(ranking_method = "CEA") {
+  p <- outTab %>% filter(ranking == ranking_method) %>% 
+    pivot_longer(cols = c("Jaccard", "Coverage", "Semantics"), names_to = "TYPE", values_to = "Distance") %>% 
+    mutate(TYPE = factor(TYPE, levels = c("Jaccard", "Coverage", "Semantics"))) %>% 
+    ggplot(aes(Rank, Distance, color = TYPE)) +
+    geom_line(linewidth = 1) +
+    geom_point(shape = 21, fill = "white") +
+    theme_pubr() +
+    labs(y = "distance") +
+    theme(axis.text = element_text(size = 7), axis.line = element_blank(),
+          panel.border = element_rect(colour = "gray20", fill = NA, linewidth = 1),
+          axis.title = element_text(size = 9),
+          legend.position = "none") +
+    facet_wrap(TYPE ~ ., scale = "free_y") +  
+    scale_color_npg()
+  return(p)
+}
+
+# -------------------------------------------------------------  
+# Combine the distance plot and the tree plot
+p_cea / p_tree
 
 ```
 
-###Figure 7
+## Figure 6
+### Centrality analysis of the phenotype-specific network.
 ```{r}
-library(ggsci)
-library(expm)
-library(tibble)
-library(data.table)
-library(ggraph)
-library(ggplot2)
-library(reshape2)
-library(pROC)
-##fig
+# Load necessary libraries for data manipulation, visualization, and statistical analysis
+library(ggplot2)     
+library(dplyr)       
+library(data.table)  
+library(stringr)     
+library(ggpubr)      
+library(ggsci)       
+library(pROC)        
+library(tibble)     
+library(ggbeeswarm) 
+
+# -------------------------------------------------------------  
+### Load PSN betweenness data
+ggdata <- readRDS("data/PSN_betweeness.rds")  # Load the betweenness centrality data for pathways
+
+# Create a histogram plot for pathway betweenness centrality
+p_bet <- ggplot(ggdata, aes(gene, betweenness, fill = gene)) +
+  geom_histogram(stat = "identity") +   
+  theme_pubr() +  
+  theme(axis.title.x = element_blank(), axis.text.x = element_text(angle = 90)) +  # Customize axis text
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9), legend.position = "none") +   
+  scale_color_npg()   
+
+# -------------------------------------------------------------  
+### ZAP70 related gene signature analysis
+df_pdata <- readRDS("data/ZAP70_phenotype.rds")  # Load data for ZAP70 gene signature
+
+# Create a boxplot to visualize ZAP70 signature across different response groups (PD, SD, PR, CR)
+p_zap70 <- ggplot(df_pdata, aes(Response, ZAP70_sig, color = Response)) +
+  geom_boxplot() +  
+  stat_compare_means(comparisons = list(c("PD", "SD"), c("PD", "PR"), c("PD", "CR"), c("SD", "PR"), c("SD", "CR"), c("PR", "CR")), label = "p.signif", size = 2.5) + 
+  theme_pubr() +
+  labs(y = "Enrichment score") +  
+  theme(legend.position = "none", axis.title.x = element_blank()) +   
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9)) +  
+  geom_beeswarm(alpha = 0.4, cex = 1, size = 0.5) +   
+  scale_color_npg()   
+
+# Create another boxplot for ZAP70 signature in responders vs non-responders
+p_zap70_2 <- ggplot(df_pdata, aes(Responder, ZAP70_sig, color = Responder)) +
+  geom_boxplot() +   
+  stat_compare_means(comparisons = list(c("R", "NR")), label = "p.signif", size = 2.5) +   
+  theme_pubr() +
+  labs(y = "Enrichment score") + 
+  theme(legend.position = "none", axis.title.x = element_blank()) +  
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9)) +  
+  geom_beeswarm(alpha = 0.4, cex = 1, size = 0.5) +   
+  scale_color_npg()   
+
+# -------------------------------------------------------------  
+### Single cell analysis for ZAP70 expression in different immune cell types
+immune_cells <- c("T-cells", "B-cells", "Plasma cells", "NK-cells", "granulocytes", "monocytes", "Macrophages", "Hofbauer cells", "Kupffer cells", "dendritic cells", "Langerhans cells")
+df_single_cell <- read.csv("data/rna_single_cell_type.tsv", sep = "\t", check.names = F)  # Load single-cell RNA-seq data
+
+# Filter the data for ZAP70 expression in specific immune cell types
+df_single_cell <- df_single_cell[df_single_cell$`Gene name` == "ZAP70", ]
+df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells, ]
+
+# Create a bar plot to visualize ZAP70 expression across different immune cell types
+p_single_cell <- ggplot(df_single_cell, aes(`Cell type`, nTPM, fill = `Cell type`)) +
+  geom_col() +  # Create a bar plot
+  theme_pubr() +
+  labs(y = "nTPM(ZAP70)") +  # Label for the y-axis
+  theme(axis.text = element_text(size = 7), axis.text.x = element_text(angle = 90, hjust = 1), axis.title = element_text(size = 9), legend.position = "none", axis.title.x = element_blank())  # Customize axis text and legend
+
+# -------------------------------------------------------------  
+### Tumor Microenvironment (TME) analysis for ZAP70 immune infiltration
+ggdata <- readRDS("data/ZAP70_immune_infiltration.rds")  # Load the TME data
+
+# Create a heatmap to visualize the correlation of ZAP70 with immune infiltration across different cell types
+p_tme <- ggplot(ggdata, aes(Cell1, factor(Cell2, levels = rev(Cell2)), Correlation, fill = Correlation)) +
+  geom_tile(width = 0.95, height = 1.2) +   
+  geom_text(aes(label = round(Correlation, 2)), color = "gray20", size = 2.5) +   
+  geom_text(aes(label = Significance, x = 1.2), hjust = 0, size = 2.5) +   
+  scale_fill_gradient2(low = "#0C6291", high = "#A63446", mid = "#FBFEF9", midpoint = 0) +   
+  theme_pubr() +  # Apply a publication-ready theme
+  theme(axis.line = element_blank(), axis.ticks = element_blank(), axis.text = element_text(size = 7), legend.title = element_text(size = 7), legend.text = element_text(size = 4.5), legend.key.height = unit(0.15, "cm"), axis.title = element_blank(), legend.position = c(0, -0.25), legend.direction = "horizontal", legend.key.width = unit(0.5, "cm"))
+
+# -------------------------------------------------------------  
+### Combine the plots for betweenness, ZAP70 signature, single-cell, and TME into one figure
+(p_bet | p_zap70_2 | p_zap70) / (p_single_cell | p_tme)   
+
+```
+
+## Figure 7
+### Network propagation of immune checkpoints on the phenotype-specific network.
+```{r}
+# Load necessary libraries for data manipulation, graph analysis, and visualization
+library(ggsci)     
+library(expm)      
+library(tibble)     
+library(data.table)  
+library(ggraph)    
+library(ggplot2)    
+library(reshape2)  
+library(pROC)       
+
+## Function for heat diffusion based on graph structure
 heat_diffusion <- function(graph, start_node_name, t, initial_heat = 1) {
-  laplacian_matrix <- as.matrix(laplacian_matrix(graph ))
-  node_names <- V(graph)$name
-  start_node <- which(node_names == start_node_name)
+  # Calculate the Laplacian matrix for the graph (diffusion matrix)
+  laplacian_matrix <- as.matrix(laplacian_matrix(graph))
+  node_names <- V(graph)$name  # Get node names from the graph
+  start_node <- which(node_names == start_node_name)  # Find the index of the start node
   
+  # Check if the start node exists in the graph
   if (length(start_node) == 0) {
     stop("Start node name not found in the graph.")
   }
   
+  # Initialize the heat values with zero and set the initial heat for the start node
   heat <- rep(0, vcount(graph))
   heat[start_node] <- initial_heat
 
+  # Calculate the diffusion matrix (exponential of the Laplacian matrix)
   diffusion_matrix <- expm(-t * laplacian_matrix)
 
+  # Apply diffusion to calculate the final heat distribution across the graph
   final_heat <- diffusion_matrix %*% heat
   
-  return(final_heat)
+  return(final_heat)   
 }
 
-df_gene_interactions <- read.csv("data/neigbors_network.csv",row.names = 1)
-g <- graph_from_data_frame(df_gene_interactions,directed = F)
+## Load the gene interaction network data
+df_gene_interactions <- read.csv("data/neigbors_network.csv", row.names = 1)
+g <- graph_from_data_frame(df_gene_interactions, directed = F) 
 
-
-
-get_heats <- function(start_node  ="PDCD1"){
- t <- 0.1
-heat_values <- heat_diffusion(g, start_node, t)
-heat_values <-  data.frame(heat=heat_values,row.names = rownames(heat_values))
-heat_values <- heat_values[order(heat_values$heat,decreasing = T),,drop=F]
-return(heat_values) 
+# Function to get the heat values for a given node
+get_heats <- function(start_node = "PDCD1") {
+  t <- 0.1  # Define the diffusion time
+  heat_values <- heat_diffusion(g, start_node, t)  # Get the heat values using diffusion
+  heat_values <- data.frame(heat = heat_values, row.names = rownames(heat_values))  # Create a data frame for heat values
+  heat_values <- heat_values[order(heat_values$heat, decreasing = T), , drop = F]  # Sort heat values in descending order
+  return(heat_values)   
 }
 
+# Calculate heat values for specific genes (PDCD1, CTLA4, ZAP70)
 heat_PDCD1 <- get_heats("PDCD1")
 heat_CTLA4 <- get_heats("CTLA4")
 heat_ZAP70 <- get_heats("ZAP70")
 
-pd <- merge(heat_PDCD1,heat_CTLA4,by="row.names") 
-pd[,2:3] <- apply(pd[,2:3],2,rank)
-colnames(pd) <- c("gene","PDCD1","CTLA4")
-pd <- pd[ pd$PDCD1>133 |pd$CTLA4>133 ,]
+# Merge the heat values for different genes into a single data frame
+pd <- merge(heat_PDCD1, heat_CTLA4, by = "row.names") 
+pd[, 2:3] <- apply(pd[, 2:3], 2, rank)  # Rank the heat values
+colnames(pd) <- c("gene", "PDCD1", "CTLA4")  # Rename columns for clarity
+pd <- pd[pd$PDCD1 > 133 | pd$CTLA4 > 133, ]  # Filter out low-rank pathways
 
-
+# Define a polygon for highlighting specific regions in the plot
 polygon_data <- data.frame(
-  x = c(132,132,147,150,150,135),
-  y = c(132,135,150,150,147,132)
+  x = c(132, 132, 147, 150, 150, 135),
+  y = c(132, 135, 150, 150, 147, 132)
 )
-p_rank <- ggplot(pd,aes(PDCD1,CTLA4 ))+
-  # geom_vline(xintercept = seq(floor(range(pd$PDCD1)[1]), ceiling(range(pd$PDCD1)[2]), by = 1), color = "grey", linetype = "dashed") +
-  # geom_hline(yintercept = seq(floor(range(pd$CTLA4)[1]), ceiling(range(pd$CTLA4)[2]), by = 1), color = "grey", linetype = "dashed") +
 
-  geom_point(shape=21,fill="white",size=1.5)+
-  geom_text(aes(label = gene), vjust = -0.5, hjust = 0.5, size = 2.5,color=ifelse(pd$gene %in% c("PDCD1","CTLA4"),"darkred","gray20"))+
-  theme_pubr()+
-    geom_polygon(data = polygon_data, aes(x = x, y = y), fill = "darkred", alpha = 0.2) +
+# Create a scatter plot for PDCD1 and CTLA4 heat ranks
+p_rank <- ggplot(pd, aes(PDCD1, CTLA4)) +
+  geom_point(shape = 21, fill = "white", size = 1.5) +   
+  geom_text(aes(label = gene), vjust = -0.5, hjust = 0.5, size = 2.5, color = ifelse(pd$gene %in% c("PDCD1", "CTLA4"), "darkred", "gray20")) +   
+  theme_pubr() +
+  geom_polygon(data = polygon_data, aes(x = x, y = y), fill = "darkred", alpha = 0.2) +  # Add a polygon to highlight a region
+  labs(x = "Heat rank(PDCD1)", y = "Heat rank(CTLA4)") +
+  theme(panel.border = element_rect(colour = "black", fill = NA), axis.text = element_text(size = 7), legend.position = "none", axis.title = element_text(size = 9))
 
-  labs(x="Rank(PDCD1)",y="Rank(CTLA4)")+
-  theme( panel.border = element_rect(colour = "black", fill = NA ),axis.text = element_text(size = 7) , legend.position = "none" ,axis.title = element_text(size=9))
+# -------------------------------------------------------------  
+# Load single-cell RNA-seq data for ICOS expression across immune cell types
+immune_cells <- c("T-cells", "B-cells", "Plasma cells", "NK-cells", "granulocytes", "monocytes", "Macrophages", "Hofbauer cells", "Kupffer cells", "dendritic cells", "Langerhans cells")
+df_single_cell <- read.csv("data/rna_single_cell_type.tsv", sep = "\t", check.names = F)
 
+# Filter data for ICOS gene expression in immune cells
+df_single_cell <- df_single_cell[df_single_cell$`Gene name` == "ICOS", ]
+df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells, ]
 
+# Create a bar plot to visualize ICOS expression across different immune cell types
+p_ICOS <- ggplot(df_single_cell, aes(`Cell type`, nTPM, fill = `Cell type`)) +
+  geom_col() +   
+  theme_pubr() + 
+  labs(y = "ICOSLG(nTPM)") +  
+  theme(axis.text = element_text(size = 7), axis.text.x = element_text(angle = 90, hjust = 1), axis.title = element_text(size = 9), legend.position = "none", axis.title.x = element_blank())
 
-immune_cells <- c("T-cells","B-cells","Plasma cells","NK-cells","granulocytes","monocytes","Macrophages","Hofbauer cells","Kupffer cells","dendritic cells","Langerhans cells")
-df_single_cell <- read.csv("data/rna_single_cell_type.tsv",sep="\t",check.names = F)
-df_single_cell <- df_single_cell[df_single_cell$`Gene name`=="ICOS",]
-df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells,]
+# -------------------------------------------------------------  
+# Filter data for ICOSLG gene expression in immune cells
+df_single_cell <- df_single_cell[df_single_cell$`Gene name` == "ICOSLG", ]
 
-p_ICOS <- ggplot(df_single_cell,aes(`Cell type`,nTPM,fill=`Cell type`))+
-  geom_col()+
-  theme_pubr()+ 
-  theme( axis.text = element_text(size=7 ),axis.text.x = element_text( angle = 90,hjust = 1), axis.title = element_text(size = 9),legend.position = "none",axis.title.x = element_blank())
+# Create a bar plot to visualize ICOSLG expression across different immune cell types
+p_ICOSLG <- ggplot(df_single_cell, aes(`Cell type`, nTPM, fill = `Cell type`)) +
+  geom_col() +   
+  labs(y = "ICOS(nTPM)") +   
+  theme_pubr() + 
+  theme(axis.text = element_text(size = 7), axis.text.x = element_text(angle = 90, hjust = 1), axis.title = element_text(size = 9), legend.position = "none", axis.title.x = element_blank())
 
+# -------------------------------------------------------------  
+### ICOS related gene signature analysis
+# Load data for ICOS-related phenotype (enrichment scores)
+df_pdata <- readRDS("data/ICOS_phenotype.rds")
 
-df_single_cell <- read.csv("data/rna_single_cell_type.tsv",sep="\t",check.names = F)
-df_single_cell <- df_single_cell[df_single_cell$`Gene name`=="ICOSLG",]
-df_single_cell <- df_single_cell[df_single_cell$`Cell type` %in% immune_cells,]
+# Create a boxplot for ICOS signature across different response groups (PD, SD, PR, CR)
+p_icos <- ggplot(df_pdata, aes(Response, ICOS_sig, color = Response)) +
+  geom_boxplot() +   
+  stat_compare_means(comparisons = list(c("PD", "SD"), c("PD", "PR"), c("PD", "CR"), c("SD", "PR"), c("SD", "CR"), c("PR", "CR")), label = "p.signif", size = 2.5) +  
+  theme_pubr() + 
+  labs(y = "Enrichment score") +  
+  theme(legend.position = "none", axis.title.x = element_blank()) +  
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9)) +
+  geom_beeswarm(alpha = 0.4, cex = 1, size = 0.5) +   
+  scale_color_npg()   
 
-p_ICOSLG <- ggplot(df_single_cell,aes(`Cell type`,nTPM,fill=`Cell type`))+
-  geom_col()+
-  theme_pubr()+ 
-  theme( axis.text = element_text(size=7 ),axis.text.x = element_text( angle = 90,hjust = 1), axis.title = element_text(size = 9),legend.position = "none",axis.title.x = element_blank())
+# Create another boxplot for ICOS signature in responders vs non-responders
+p_icos_2 <- ggplot(df_pdata, aes(Responder, ICOS_sig, color = Responder)) +
+  geom_boxplot() +   
+  stat_compare_means(comparisons = list(c("R", "NR")), label = "p.signif", size = 2.5) +  
+  theme_pubr() + 
+  labs(y = "Enrichment score") + 
+  theme(legend.position = "none", axis.title.x = element_blank()) +  
+  theme(axis.text = element_text(size = 7), axis.title = element_text(size = 9)) +
+  geom_beeswarm(alpha = 0.4, cex = 1, size = 0.5) +  
+  scale_color_npg()   
 
+# -------------------------------------------------------------  
+# Combine the plots (rank plot, ICOS, ICOSLG, and phenotype plots)
+(p_rank + p_ICOSLG / p_ICOS) / (p_icos_2 + p_icos) 
 
-df_expr <- read.csv("data/expression_tpm.csv")
-colnames(df_expr)[1] <- "Run_ID"
-df_clin <-  read.csv("data/clin.csv")
-
-response_labels <- c("Complete Response"="CR","Partial Response"="PR","Stable Disease"="SD","Progressive Disease"="PD")
-df_clin[["Response"]] <- response_labels[df_clin[["Response"]]]
-# df_clin[["Response"]] <- as.integer(df_clin[["Response"]] )
-df_clin[["Response"]]  <- factor(df_clin[["Response"]] , levels = c("PD", "SD", "PR", "CR"))
-
-
-pd_ici <- merge(df_expr,df_clin,by="Run_ID")
-
-gene <- "ICOS"
-roc_ <- roc(pd_ici$Responder,pd_ici[[gene]],direction="<",levels=c(F,T))
-
-fpr <- roc_$specificities
-tpr <- roc_$sensitivities
-roc_data <- data.frame(FPR = 1 - fpr, TPR = tpr,gene=gene)
-p_roc <- ggplot(roc_data, aes(x = FPR, y = TPR)) +
-  geom_line(color = "#E64B35", linewidth = 1) +
-  theme_pubr()+
-  geom_abline(linetype = "dashed",color="gray20", linewidth = 1)+
-    annotate("text", x = 0.8, y = 0.2, label = paste("AUC =", round(auc(roc_), 2)), hjust = 1)+
-  theme(panel.border = element_rect(colour = "black", fill=NA, linewidth =1))+
-  theme(axis.text = element_text( size = 7),axis.title = element_text(size=9))
-
-###merge
- (p_rank+p_roc)/(p_ICOS+p_ICOSLG) 
  
+```
+
+## Figure 8
+### Benchmark of gene signatures for hallmarks of immune response
+```{r}
+# Load necessary libraries for data manipulation, visualization, and statistical analysis
+library(data.table)   
+library(pROC)         
+library(Hmisc)        
+
+# Load the benchmark data for signatures
+pdata <- readRDS("data/signatures_benchmark.rds")  # Load the signature benchmark data
+
+# Initialize an empty data frame to store AUC results
+outTab_auc <- data.frame()
+
+# Loop through each signature column and calculate the AUC for each signature
+for (sig in colnames(df_activities)[-1]) {  # Skip the first column, which may not be a signature
+  roc_ <- roc(pdata$Responder, pdata[[sig]], direction = "<", levels = c(F, T))  # Calculate ROC for each signature
+  outTab_auc <- rbind(outTab_auc, cbind(sig = sig, auc = auc(roc_)))
+}
+
+# Filter the results to only include specific signatures
+outTab_auc <- outTab_auc[outTab_auc$sig %in% c("ZAP70", "ICOS", hallmarks_of_immune_response),]
+# Ensure that the signature column is a factor and order it appropriately
+outTab_auc[["sig"]] <- factor(outTab_auc[["sig"]], levels = c(hallmarks_of_immune_response, "ICOS", "ZAP70"))
+# Adjust AUC values to ensure they are between 0.5 and 1
+outTab_auc[["auc"]] <- lapply(as.numeric(outTab_auc[["auc"]]), function(x) {
+  ifelse(x < 0.5, 1 - x, x)
+})
+
+# Create a bar plot to visualize the AUC values for the selected signatures
+p_sig_auc <- ggplot(outTab_auc, aes(sig, as.double(auc), fill = sig)) +
+  # Add horizontal dashed line at the AUC for ZAP70
+  geom_hline(yintercept = as.numeric(outTab_auc[outTab_auc$sig == "ZAP70", "auc"]), linetype = "dashed", color = "darkred") +
+  geom_text(aes(label = round(as.double(auc), 2)), vjust = -0.3, size = 2.5) + 
+  geom_col() + 
+  theme_pubr() +  
+  labs(y = "AUC") +
+  theme(axis.text = element_text(size = 7), axis.title.y = element_text(size = 9), axis.text.x = element_text(angle = 90, hjust = 1), axis.ticks.length.x = unit(0.5, "mm"), axis.title.x = element_blank(), legend.position = "none") +
+  scale_color_npg()  
+
+# Recode the response variable into numeric values (1 = PD, 2 = SD, 3 = PR, 4 = CR)
+pdata[["Response"]] <- ifelse(pdata[["Response"]] == "PD", 1, pdata[["Response"]])
+pdata[["Response"]] <- ifelse(pdata[["Response"]] == "SD", 2, pdata[["Response"]])
+pdata[["Response"]] <- ifelse(pdata[["Response"]] == "PR", 3, pdata[["Response"]])
+pdata[["Response"]] <- ifelse(pdata[["Response"]] == "CR", 4, pdata[["Response"]])
+
+# Initialize an empty data frame to store C-index results
+outTab_ci <- data.frame()
+
+# Loop through each signature column and calculate the C-index for each signature
+for (sig in colnames(df_activities)[-1]) {
+  s <- Surv(pdata[["PFS_d"]], pdata[["PFS_e"]])  # Create a survival object using PFS data
+  ci <- Hmisc::rcorr.cens(pdata[[sig]], s)[["C Index"]]  # Calculate the C-index for each signature
+  # Store the calculated C-index for each signature
+  outTab_ci <- rbind(outTab_ci, cbind(sig = sig, ci = ci))
+}
+
+# Filter the results to only include specific signatures
+outTab_ci <- outTab_ci[outTab_ci$sig %in% c("ZAP70", "ICOS", hallmarks_of_immune_response),]
+# Adjust C-index values to ensure they are between 0.5 and 1
+outTab_ci[["ci"]] <- lapply(as.numeric(outTab_ci[["ci"]]), function(x) {
+  ifelse(x < 0.5, 1 - x, x)
+})
+# Ensure that the signature column is a factor and order it appropriately
+outTab_ci[["sig"]] <- factor(outTab_ci[["sig"]], levels = c(hallmarks_of_immune_response, "ICOS", "ZAP70"))
+
+# Create a bar plot to visualize the C-index values for the selected signatures
+p_sig_ci <- ggplot(outTab_ci, aes(sig, as.double(ci), fill = sig)) +
+  geom_hline(yintercept = as.numeric(outTab_ci[outTab_ci$sig == "ICOS", "ci"]), linetype = "dashed", color = "darkred") +
+  geom_text(aes(label = round(as.double(ci), 2)), vjust = -0.3, size = 2.5) +  
+  geom_col() +  
+  theme_pubr() +  
+  labs(y = "C-index") +  
+  theme(axis.text = element_text(size = 7), axis.title.y = element_text(size = 9), axis.text.x = element_text(angle = 90, hjust = 1), axis.ticks.length.x = unit(0.5, "mm"), axis.title.x = element_blank(), legend.position = "none") +
+  scale_color_npg()  
+
+# -------------------------------------------------------------  
+# Combine the AUC and C-index plots into a single figure for comparison
+p_sig_auc + p_sig_ci   
+
 ```
 
 
