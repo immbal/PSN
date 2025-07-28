@@ -9,5 +9,5 @@ The full workflow for constructing the phenotype-specific network—including sa
 
 The `code.Rmd` file is structured according to this workflow and provides detailed step-by-step implementation.
 
-This work is cited by:  
-*(Citation information to be provided soon.)*
+This repository accompanies our manuscript currently under peer review.
+Citation information will be provided upon publication.
