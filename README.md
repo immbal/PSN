@@ -5,7 +5,7 @@
 
 The full workflow for constructing the phenotype-specific network—including sample-pathway matrix computation, pathway ranking, and downstream network analysis—is illustrated in the figure below:
 
-![Workflow Overview](img/Figure1_01.png)
+![Study design](img/Figure1_01.png)
 
 The `code.Rmd` file is structured according to this workflow and provides detailed step-by-step implementation.
 
