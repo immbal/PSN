@@ -763,5 +763,79 @@ p_sig_auc + p_sig_ci
 ```
 
 
+## Figure 9
+### Rank-ordered expression of ZAP70 and ICOS in a melanoma immunotherapy cohort.
+```{r}
+library(data.table)
+library(tibble)
+library(ggplot2)
+library(pROC)
+library(ggpubr)
+library(patchwork)
+library(ggsci)
+library( stringr)
+ # Specify the patient of interest
+specific_patient <- "PD53"
+
+# Load the patient dataset
+df_pdata <- readRDS("data/case_study.rds")
+
+# Calculate ROC and AUC for ZAP70
+roc <- roc(df_pdata[["Responder"]], df_pdata[["ZAP70"]], direction=">", levels=c(T,F))
+auc_ <- auc(roc)
+
+# Calculate ROC and AUC for ICOS
+roc <- roc(df_pdata[["Responder"]], df_pdata[["ICOS"]], direction=">", levels=c(T,F))
+auc_ <- auc(roc)
+
+# Convert Responder variable into categorical labels "R" (Responder) and "NR" (Non-Responder)
+df_pdata[["Responder"]] <- ifelse(df_pdata[["Responder"]], "R", "NR")
+df_pdata[["Responder"]] <- factor(df_pdata[["Responder"]], levels = c("R","NR"))
+
+# -------- Plot 1: ZAP70 --------
+p1 <- ggplot(df_pdata[order(df_pdata$ZAP70, decreasing = F),], 
+             aes(x=1:nrow(df_pdata), y=ZAP70, color=Responder)) +
+  geom_point() +
+  theme_pubr() +
+  # Add red dashed line at patient 46 (middle cutoff)
+  annotate("segment", x=46, xend=46, y=0, yend=5, colour="darkred", linetype="dashed", size=0.5) +
+  # Add AUC annotation text
+  annotate("text", x=60, y=1, label="AUC(ZAP70) = 0.750", color="black", size=3, hjust=0) +
+  labs(color="Responders", y="Expression(ZAP70)") +
+  theme(
+    axis.text = element_text(size=7),
+    axis.title.y = element_text(size=9),
+    axis.ticks.length.x = unit(0.5, "mm"),
+    axis.title.x = element_blank(),
+    legend.text = element_text(size=7),
+    legend.title = element_text(size=9),
+    legend.position = c(0.1, 0.8)
+  ) +
+  scale_color_npg()
+
+# -------- Plot 2: ICOS --------
+p2 <- ggplot(df_pdata[order(df_pdata$ICOS, decreasing = F),], 
+             aes(x=1:nrow(df_pdata), y=ICOS, color=Responder)) +
+  geom_point() +
+  theme_pubr() +
+  # Add red dashed line at patient 46 (middle cutoff)
+  annotate("segment", x=46, xend=46, y=0, yend=4, colour="darkred", linetype="dashed", size=0.5) +
+  # Add AUC annotation text
+  annotate("text", x=60, y=1, label="AUC(ICOS) = 0.764", color="black", size=3, hjust=0) +
+  labs(color="Responders", y="Expression(ICOS)", x="Patients") +
+  theme(
+    axis.text = element_text(size=7),
+    axis.title.y = element_text(size=9),
+    axis.ticks.length.x = unit(0.5,"mm"),
+    legend.position = "none",   # Hide legend for the second plot
+    axis.title.x = element_text(size=9)
+  ) +
+  scale_color_npg()
+
+# Combine the two plots side by side
+p1 + p2
+
+  
+```
 
 
